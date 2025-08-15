@@ -1,4 +1,5 @@
 
+
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
@@ -150,7 +151,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                         const sku = (row['SKU Gudang'] || '').toString().trim();
                         if (!sku) return null;
                         
-                        const orderNumber = (row['nomer pesanan'] || '').toString().trim();
+                        const orderNumber = (row['Nomor Pesanan'] || '').toString().trim();
                         if(orderNumber) {
                             uniqueOrders.add(orderNumber);
                         }
