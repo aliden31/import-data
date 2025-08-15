@@ -155,7 +155,7 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
   const [isFormOpen, setFormOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | undefined>(undefined);
   const { toast } = useToast();
-  const [sortOrder, setSortOrder] = useState('terlaris');
+  const [sortOrder, setSortOrder] = useState('nama-az');
 
     const fetchInitialData = async () => {
         setLoading(true);
