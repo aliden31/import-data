@@ -207,6 +207,10 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
                 return b.stock - a.stock;
             case 'stok-tersedikit':
                 return a.stock - b.stock;
+            case 'harga-terendah':
+                return a.sellingPrice - b.sellingPrice;
+            case 'harga-tertinggi':
+                return b.sellingPrice - a.sellingPrice;
             default:
                 return 0;
         }
@@ -296,6 +300,8 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
                         <SelectItem value="nama-za">Nama Z-A</SelectItem>
                         <SelectItem value="stok-terbanyak">Stok Terbanyak</SelectItem>
                         <SelectItem value="stok-tersedikit">Stok Tersedikit</SelectItem>
+                        <SelectItem value="harga-terendah">Harga Terendah</SelectItem>
+                        <SelectItem value="harga-tertinggi">Harga Tertinggi</SelectItem>
                     </SelectContent>
                 </Select>
             </div>
@@ -381,3 +387,5 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
 
 ProdukPage.displayName = 'ProdukPage';
 export default ProdukPage;
+
+    
