@@ -25,13 +25,24 @@ import {
   DialogFooter,
   DialogClose,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { Expense, Settings, UserRole, SubCategory } from '@/lib/types';
-import { PlusCircle, Calendar as CalendarIcon, Edit, Search } from 'lucide-react';
+import { PlusCircle, Calendar as CalendarIcon, Edit, Search, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { getExpenses, addExpense, getSettings, updateExpense } from '@/lib/data-service';
+import { getExpenses, addExpense, getSettings, updateExpense, deleteExpense } from '@/lib/data-service';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { format, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
@@ -369,6 +380,16 @@ const PengeluaranPage: FC<PengeluaranPageProps> = React.memo(({ userRole }) => {
     }
   }
 
+  const handleDeleteExpense = async (expense: Expense) => {
+      try {
+          await deleteExpense(expense, userRole);
+          toast({ title: "Pengeluaran Dihapus", description: `Pengeluaran "${expense.name}" telah dihapus.` });
+          await fetchInitialData();
+      } catch (error) {
+          toast({ title: "Error", description: "Gagal menghapus pengeluaran.", variant: "destructive" });
+      }
+  };
+
   const handleOpenForm = (expense?: Expense) => {
     setEditingExpense(expense);
     setFormOpen(true);
@@ -509,10 +530,31 @@ const PengeluaranPage: FC<PengeluaranPageProps> = React.memo(({ userRole }) => {
                                       {expense.subcategory && <span className="text-muted-foreground text-xs"> / {expense.subcategory}</span>}
                                   </TableCell>
                                   <TableCell className="text-right">{formatCurrency(expense.amount)}</TableCell>
-                                  <TableCell className="text-right">
-                                      <Button variant="ghost" size="icon" onClick={() => handleOpenForm(expense)}>
-                                          <Edit className="h-4 w-4" />
-                                      </Button>
+                                  <TableCell className="text-right space-x-2">
+                                    <Button variant="ghost" size="icon" onClick={() => handleOpenForm(expense)}>
+                                        <Edit className="h-4 w-4" />
+                                    </Button>
+                                    <AlertDialog>
+                                        <AlertDialogTrigger asChild>
+                                            <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                        </AlertDialogTrigger>
+                                        <AlertDialogContent>
+                                            <AlertDialogHeader>
+                                                <AlertDialogTitle>Hapus Pengeluaran?</AlertDialogTitle>
+                                                <AlertDialogDescription>
+                                                    Tindakan ini akan menghapus catatan pengeluaran "{expense.name}" secara permanen. Apakah Anda yakin?
+                                                </AlertDialogDescription>
+                                            </AlertDialogHeader>
+                                            <AlertDialogFooter>
+                                                <AlertDialogCancel>Batal</AlertDialogCancel>
+                                                <AlertDialogAction onClick={() => handleDeleteExpense(expense)} className="bg-destructive hover:bg-destructive/90">
+                                                    Hapus
+                                                </AlertDialogAction>
+                                            </AlertDialogFooter>
+                                        </AlertDialogContent>
+                                    </AlertDialog>
                                   </TableCell>
                                   </TableRow>
                               )) : (
@@ -559,5 +601,6 @@ const PengeluaranPage: FC<PengeluaranPageProps> = React.memo(({ userRole }) => {
 
 PengeluaranPage.displayName = 'PengeluaranPage';
 export default PengeluaranPage;
+
 
 

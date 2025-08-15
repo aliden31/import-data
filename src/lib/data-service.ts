@@ -327,6 +327,11 @@ export const updateExpense = async (id: string, expenseData: Partial<Omit<Expens
     await addActivityLog(user, `memperbarui pengeluaran: "${expenseData.name}"`);
 };
 
+export const deleteExpense = async (expense: Expense, user: UserRole) => {
+    await deleteDocument('expenses', expense.id);
+    await addActivityLog(user, `menghapus pengeluaran: "${expense.name}"`);
+};
+
 
 // Return-specific functions
 export async function getReturns(): Promise<Return[]> {
