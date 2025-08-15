@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { Product, Sale, Settings, UserRole } from '@/lib/types';
+import type { Product, Sale, UserRole } from '@/lib/types';
 import { PlusCircle, Edit, Trash2, MoreHorizontal, FileDown } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -178,7 +178,7 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
 
   useEffect(() => {
     fetchInitialData();
-  }, [userRole]);
+  }, []);
   
   const sortedProducts = useMemo(() => {
     const productsWithSales = products.map(product => {
@@ -201,7 +201,7 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
             case 'stok-tersedikit':
                 return a.stock - b.stock;
             case 'harga-terendah':
-                return a.sellingPrice - a.sellingPrice;
+                return a.sellingPrice - b.sellingPrice;
             case 'harga-tertinggi':
                 return b.sellingPrice - a.sellingPrice;
             default:
@@ -424,5 +424,3 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
 
 ProdukPage.displayName = 'ProdukPage';
 export default ProdukPage;
-
-    
