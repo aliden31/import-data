@@ -163,16 +163,8 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
             const productsDataPromise = getProducts();
             const salesDataPromise = getSales();
 
-            let [productsData, salesData] = await Promise.all([productsDataPromise, salesDataPromise]);
+            const [productsData, salesData] = await Promise.all([productsDataPromise, salesDataPromise]);
 
-            if (productsData.length === 0 && userRole === 'admin') {
-                toast({ title: "Database produk kosong", description: "Menginisialisasi dengan data sampel..." });
-                await addPlaceholderProducts();
-                productsData = await getProducts(); // Re-fetch products after adding placeholders
-                toast({ title: "Inisialisasi berhasil", description: "Data produk sampel telah ditambahkan." });
-                onDataChange(); // Notify parent of data change
-            }
-            
             setProducts(productsData);
             setSales(salesData);
         } catch (error) {
