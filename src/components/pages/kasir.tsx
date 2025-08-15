@@ -394,8 +394,8 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
                 </div>
             ) : (
                 <div className="space-y-4">
-                {cart.map((item) => (
-                    <div key={item.product.id} className="flex items-center gap-4">
+                {cart.map((item, index) => (
+                    <div key={`${item.product.id}-${index}`} className="flex items-center gap-4">
                         <div className="flex-grow">
                             <p className="font-semibold text-sm md:text-base">{item.product.name}</p>
                             <Input
