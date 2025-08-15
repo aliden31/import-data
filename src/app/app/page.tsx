@@ -1,4 +1,5 @@
 
+
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -300,10 +301,7 @@ function AppPageContent() {
         return <PdfConverterPage />;
       case 'sales-importer':
         return <SalesImporterPage 
-          onImportComplete={(items) => {
-            setCart(items);
-            refreshAllData(true);
-          }} 
+          onImportComplete={refreshAllData} 
           userRole={userRole!} 
         />;
       case 'flash-sale':
