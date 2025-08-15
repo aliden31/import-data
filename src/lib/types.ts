@@ -138,3 +138,10 @@ export interface ImportedFile {
     name: string;
     importedAt: Date;
 }
+
+export interface SkuMapping {
+    id: string;
+    importSku: string;
+    mappedProductId: string;
+    mappedProductName: string;
+}

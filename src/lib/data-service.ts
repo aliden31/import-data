@@ -20,7 +20,7 @@ import {
   onSnapshot,
   where,
 } from 'firebase/firestore';
-import type { Product, Sale, Return, Expense, FlashSale, Settings, SaleItem, ReturnItem, Category, SubCategory, StockOpnameLog, UserRole, ActivityLog, PublicSettings, OtherIncome, ImportedFile } from './types';
+import type { Product, Sale, Return, Expense, FlashSale, Settings, SaleItem, ReturnItem, Category, SubCategory, StockOpnameLog, UserRole, ActivityLog, PublicSettings, OtherIncome, ImportedFile, SkuMapping } from './types';
 import { placeholderProducts } from './placeholder-data';
 
 // Generic Firestore interaction functions
@@ -610,6 +610,30 @@ export const addImportedFile = async (fileName: string): Promise<void> => {
         importedAt: new Date(),
     };
     await addDocument<ImportedFile>('importedFiles', fileData);
+};
+
+// SKU Mapping Functions
+export const getSkuMappings = async (): Promise<SkuMapping[]> => {
+    return getCollection<SkuMapping>('skuMappings');
+};
+
+export const saveSkuMapping = async (mapping: Omit<SkuMapping, 'id'>): Promise<SkuMapping> => {
+    // Check if a mapping for this importSku already exists
+    const q = query(collection(db, 'skuMappings'), where('importSku', '==', mapping.importSku));
+    const querySnapshot = await getDocs(q);
+
+    if (!querySnapshot.empty) {
+        // Update the existing mapping
+        const existingDoc = querySnapshot.docs[0];
+        await updateDocument('skuMappings', existingDoc.id, {
+            mappedProductId: mapping.mappedProductId,
+            mappedProductName: mapping.mappedProductName,
+        });
+        return { id: existingDoc.id, ...existingDoc.data(), ...mapping } as SkuMapping;
+    } else {
+        // Add a new mapping
+        return addDocument<SkuMapping>('skuMappings', mapping);
+    }
 };
 
 
