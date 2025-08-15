@@ -35,6 +35,7 @@ import {
   Calculator,
   PlusSquare,
   FileAxis3d,
+  FileUp,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -55,6 +56,7 @@ import ActivityLogPage from '@/components/pages/activity-log';
 import ErpPage from '@/components/pages/erp';
 import KalkulatorRoasPage from '@/components/pages/kalkulator-roas';
 import PdfConverterPage from '@/components/pages/pdf-converter';
+import SalesImporterPage from '@/components/pages/sales-importer-page';
 import { SaleItem, Product, Settings as AppSettings, UserRole, FlashSale, Category, PublicSettings, Sale, Return } from '@/lib/types';
 import { getSettings, getFlashSaleSettings, getProducts, getPublicSettings, getSales, getReturns } from '@/lib/data-service';
 import { useToast } from '@/hooks/use-toast';
@@ -81,7 +83,8 @@ type View =
   | 'activity-log'
   | 'erp'
   | 'kalkulator-roas'
-  | 'pdf-converter';
+  | 'pdf-converter'
+  | 'sales-importer';
 
 const defaultSettings: AppSettings = { 
   storeName: 'Memuat...', 
@@ -226,6 +229,7 @@ function AppPageContent() {
     { id: 'laporan', label: 'Laporan Arus Kas', icon: AreaChart, roles: ['admin'] },
     { id: 'kalkulator-roas', label: 'Kalkulator ROAS', icon: Calculator, roles: ['admin'] },
     { id: 'pdf-converter', label: 'PDF ke Excel', icon: FileAxis3d, roles: ['admin'] },
+    { id: 'sales-importer', label: 'Impor Penjualan', icon: FileUp, roles: ['admin'] },
     { id: 'flash-sale', label: 'Flash Sale', icon: Zap, roles: ['admin'] },
     { id: 'pengaturan', label: 'Pengaturan', icon: Settings, roles: ['admin', 'kasir'] },
     { id: 'activity-log', label: 'Log Aktivitas', icon: History, roles: ['admin'] },
@@ -238,10 +242,6 @@ function AppPageContent() {
   const handleNavigate = (view: View) => {
     setActiveView(view);
     setOpenMobile(false);
-  }
-  
-  const handleSettingsChange = () => {
-    refreshAllData();
   }
 
   const renderView = () => {
@@ -298,6 +298,8 @@ function AppPageContent() {
         return <KalkulatorRoasPage />;
       case 'pdf-converter':
         return <PdfConverterPage />;
+      case 'sales-importer':
+        return <SalesImporterPage onImportComplete={(items) => setCart(items)} userRole={userRole!} />;
       case 'flash-sale':
         return <FlashSalePage onSettingsSave={refreshAllData} userRole={userRole!} />;
       case 'pengaturan':

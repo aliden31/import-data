@@ -40,7 +40,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Skeleton } from '../ui/skeleton';
 import { ReturnForm } from './retur';
 import { ExpenseForm } from './pengeluaran';
-import { SalesImporter } from '../sales-importer';
 
 
 const formatCurrency = (amount: number) => {
@@ -85,7 +84,6 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
   const [sortOrder, setSortOrder] = useState('terlaris');
   const [isReturnFormOpen, setReturnFormOpen] = useState(false);
   const [isExpenseFormOpen, setExpenseFormOpen] = useState(false);
-  const [isImporterOpen, setImporterOpen] = useState(false);
 
   const { toast } = useToast();
 
@@ -256,30 +254,6 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
     }
   }
 
-  const handleImportComplete = (importedItems: SaleItem[]) => {
-    setCart(prevCart => {
-        const newCart = [...prevCart];
-        
-        importedItems.forEach(importedItem => {
-            const existingItemIndex = newCart.findIndex(cartItem => cartItem.product.id === importedItem.product.id);
-            if (existingItemIndex > -1) {
-                newCart[existingItemIndex].quantity += importedItem.quantity;
-            } else {
-                newCart.push(importedItem);
-            }
-        });
-
-        return newCart;
-    });
-
-    toast({
-      title: "Impor Selesai",
-      description: `${importedItems.length} jenis produk telah ditambahkan ke keranjang.`
-    });
-    onDataNeedsRefresh(); // To get latest product data if new ones were created
-    setImporterOpen(false);
-  }
-
   const renderProductGrid = (isMobile = false) => (
     <Card className={`h-full flex flex-col shadow-none border-0 ${isMobile ? '' : 'lg:col-span-2'}`}>
       <CardHeader>
@@ -392,14 +366,6 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
                 </div>
             </div>
             <div className="grid grid-cols-2 lg:grid-cols-2 gap-2">
-                 <Dialog open={isImporterOpen} onOpenChange={setImporterOpen}>
-                    <DialogTrigger asChild>
-                        <Button variant="outline" className="w-full">
-                            <FileUp className="mr-2 h-4 w-4" /> Impor
-                        </Button>
-                    </DialogTrigger>
-                    <SalesImporter onImportComplete={handleImportComplete} userRole={userRole}/>
-                </Dialog>
                 <Dialog open={isReturnFormOpen} onOpenChange={setReturnFormOpen}>
                     <DialogTrigger asChild>
                         <Button variant="outline" className="w-full">
@@ -410,7 +376,7 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
                 </Dialog>
                 <Dialog open={isExpenseFormOpen} onOpenChange={setExpenseFormOpen}>
                     <DialogTrigger asChild>
-                        <Button variant="outline" className="w-full col-span-2">
+                        <Button variant="outline" className="w-full">
                             <Wallet className="mr-2 h-4 w-4" /> Pengeluaran
                         </Button>
                     </DialogTrigger>
