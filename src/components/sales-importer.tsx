@@ -1,4 +1,5 @@
 
+
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
@@ -14,7 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { extractSales } from '@/ai/flows/extract-sales-flow';
 import type { ExtractedSaleItem } from '@/ai/schemas/extract-sales-schema';
-import { getProducts, addProduct } from '@/lib/data-service';
+import { getProducts, addProduct, hasImportedFile, addImportedFile, addExpense } from '@/lib/data-service';
 import type { Product, UserRole, SaleItem } from '@/lib/types';
 import { FileQuestion, Loader2, Wand2, CheckCircle2, AlertCircle, Sparkles, FileSpreadsheet } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -49,6 +50,7 @@ export const SalesImporter: React.FC<SalesImporterProps> = ({ onImportComplete, 
     const [newProducts, setNewProducts] = useState<ExtractedSaleItem[]>([]);
     const [matchedProducts, setMatchedProducts] = useState<Map<string, Product>>(new Map());
     const [uniqueOrderCount, setUniqueOrderCount] = useState(0);
+    const [resiCount, setResiCount] = useState(0);
 
 
     useEffect(() => {
@@ -59,13 +61,14 @@ export const SalesImporter: React.FC<SalesImporterProps> = ({ onImportComplete, 
         fetchDbProducts();
     }, []);
 
-    const processExtractedItems = (items: ExtractedSaleItem[], uniqueOrderCountValue: number = 0) => {
+    const processExtractedItems = (items: ExtractedSaleItem[], uniqueOrderCountValue: number = 0, uniqueResiCount: number = 0) => {
         const itemsBySku = new Map<string, { totalQuantity: number; totalValue: number; name: string; originalItems: ExtractedSaleItem[] }>();
         setUniqueOrderCount(uniqueOrderCountValue);
+        setResiCount(uniqueResiCount);
 
         // 1. Group items and aggregate quantities and values
         items.forEach(item => {
-            const skuKey = item.sku || item.name;
+            const skuKey = item.sku; // Use SKU as the primary key
             if (!itemsBySku.has(skuKey)) {
                 itemsBySku.set(skuKey, { totalQuantity: 0, totalValue: 0, name: item.name, originalItems: [] });
             }
@@ -81,11 +84,13 @@ export const SalesImporter: React.FC<SalesImporterProps> = ({ onImportComplete, 
         const finalMatchedProducts = new Map<string, Product>();
 
         for (const [skuKey, aggregatedData] of itemsBySku.entries()) {
-            const { totalQuantity, totalValue, name, originalItems } = aggregatedData;
+            const { totalQuantity, totalValue, originalItems } = aggregatedData;
+            // Use the name from the first item found with that SKU
+            const name = originalItems[0].name;
             const averagePrice = totalQuantity > 0 ? totalValue / totalQuantity : 0;
             const representativeItem = originalItems[0];
 
-            const dbProduct = dbProducts.find(p => p.id.toLowerCase() === skuKey.toLowerCase() || p.name.toLowerCase() === name.toLowerCase());
+            const dbProduct = dbProducts.find(p => p.id.toLowerCase() === skuKey.toLowerCase());
             const isNew = !dbProduct;
 
             if (isNew) {
@@ -130,24 +135,29 @@ export const SalesImporter: React.FC<SalesImporterProps> = ({ onImportComplete, 
 
                 const uniqueResi = new Set<string>();
 
-                const items: ExtractedSaleItem[] = json.map((row) => {
-                    const sku = (row['SKU Gudang'] || row['SKU'] || '').toString();
-                    const resiNumber = (row['Nomor Resi'] || '').toString();
-                    if(resiNumber) {
-                        uniqueResi.add(resiNumber);
-                    }
-                    return {
-                        name: (row['Nama SKU'] || sku).toString(),
-                        sku: sku,
-                        quantity: Number(row['Jumlah'] || 0),
-                        price: Number(row['Harga Satuan'] || 0),
-                    };
-                }).filter(item => item.sku && item.quantity > 0);
+                const items: ExtractedSaleItem[] = json
+                    .map((row) => {
+                        const sku = (row['SKU Gudang'] || row['SKU'] || '').toString().trim();
+                        if (!sku) return null; // Skip rows with empty SKU
+                        
+                        const resiNumber = (row['Nomor Resi'] || '').toString().trim();
+                        if(resiNumber) {
+                            uniqueResi.add(resiNumber);
+                        }
+                        return {
+                            name: (row['Nama SKU'] || sku).toString(),
+                            sku: sku,
+                            quantity: Number(row['Jumlah'] || 0),
+                            price: Number(row['Harga Satuan'] || 0),
+                        };
+                    })
+                    .filter((item): item is ExtractedSaleItem => item !== null && item.quantity > 0);
+
 
                 if (items.length > 0) {
-                    processExtractedItems(items, uniqueResi.size);
+                    processExtractedItems(items, uniqueResi.size, uniqueResi.size);
                 } else {
-                    setErrorMessage('Format file tidak sesuai atau tidak ada data yang valid. Pastikan ada kolom "SKU Gudang" atau "SKU", "Jumlah", dan "Harga Satuan".');
+                    setErrorMessage('Format file tidak sesuai atau tidak ada data yang valid. Pastikan ada kolom "SKU Gudang" atau "SKU" dan "Jumlah".');
                     setAnalysisState('error');
                 }
             } catch (err) {
@@ -170,7 +180,7 @@ export const SalesImporter: React.FC<SalesImporterProps> = ({ onImportComplete, 
                     if (result && result.sales.length > 0) {
                         const allItems = result.sales.flatMap(s => s.items);
                         // Here, uniqueOrderCount is the number of separate invoices/notes found
-                        processExtractedItems(allItems, result.sales.length);
+                        processExtractedItems(allItems, result.sales.length, 0); // No resi count from PDF/Image
                     } else {
                         setErrorMessage('AI tidak dapat menemukan data penjualan di dalam file. Coba file lain atau pastikan formatnya jelas.');
                         setAnalysisState('error');
@@ -204,17 +214,42 @@ export const SalesImporter: React.FC<SalesImporterProps> = ({ onImportComplete, 
     };
 
     const handleConfirmImport = async () => {
+        if (!file) return;
         setAnalysisState('saving');
         try {
+            // Check if file has been imported before to prevent duplicate expense creation
+            const fileAlreadyImported = await hasImportedFile(file.name);
+
+            if (resiCount > 0 && !fileAlreadyImported) {
+                const resiExpense = {
+                    name: `Biaya Resi Marketplace - ${file.name}`,
+                    amount: resiCount * 1250,
+                    category: 'Operasional', // Or a more specific category if available
+                    date: new Date(),
+                    subcategory: 'Biaya Pengiriman'
+                };
+                await addExpense(resiExpense, 'sistem');
+                await addImportedFile(file.name);
+                toast({
+                    title: 'Pengeluaran Resi Dibuat',
+                    description: `Otomatis membuat pengeluaran untuk ${resiCount} resi sebesar ${formatCurrency(resiExpense.amount)}.`,
+                });
+            } else if (resiCount > 0 && fileAlreadyImported) {
+                 toast({
+                    title: 'Pengeluaran Dilewati',
+                    description: `Pengeluaran untuk file ini sudah pernah dibuat sebelumnya.`,
+                    variant: 'default',
+                });
+            }
+
             const newProductIds = new Map<string, string>();
             let updatedDbProducts = [...dbProducts];
 
             // 1. Create new products
             for (const newProd of newProducts) {
-                const aggregatedItem = aggregatedItems.find(item => item.sku === newProd.sku);
                 const productData = {
-                    name: newProd.name,
-                    sellingPrice: aggregatedItem?.price || newProd.price,
+                    name: newProd.sku, // Use SKU as the name for new products
+                    sellingPrice: newProd.price,
                     costPrice: 0,
                     stock: 0,
                     category: 'Impor',
@@ -299,7 +334,7 @@ export const SalesImporter: React.FC<SalesImporterProps> = ({ onImportComplete, 
                     <AlertTitle>Hasil Analisis</AlertTitle>
                     <AlertDescription>
                         Sistem berhasil mengekstrak total <span className="font-bold">{totalQuantity} item</span> dari <span className="font-bold">{aggregatedItems.length} jenis produk</span>.
-                        {uniqueOrderCount > 0 && ` Ditemukan <span className="font-bold">${uniqueOrderCount} transaksi</span> yang unik.`}
+                        {resiCount > 0 && ` Ditemukan <span className="font-bold">${resiCount} resi</span> yang unik.`}
                         Harap tinjau data di bawah ini. Produk baru akan dibuat untuk item yang tidak dikenali.
                     </AlertDescription>
                 </Alert>

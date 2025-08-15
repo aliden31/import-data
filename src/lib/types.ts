@@ -132,3 +132,9 @@ export interface ActivityLog {
 }
 
 export type UserRole = 'admin' | 'kasir';
+
+export interface ImportedFile {
+    id: string; // Firestore document ID
+    name: string;
+    importedAt: Date;
+}

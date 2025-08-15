@@ -18,8 +18,9 @@ import {
   DocumentData,
   orderBy,
   onSnapshot,
+  where,
 } from 'firebase/firestore';
-import type { Product, Sale, Return, Expense, FlashSale, Settings, SaleItem, ReturnItem, Category, SubCategory, StockOpnameLog, UserRole, ActivityLog, PublicSettings, OtherIncome } from './types';
+import type { Product, Sale, Return, Expense, FlashSale, Settings, SaleItem, ReturnItem, Category, SubCategory, StockOpnameLog, UserRole, ActivityLog, PublicSettings, OtherIncome, ImportedFile } from './types';
 import { placeholderProducts } from './placeholder-data';
 
 // Generic Firestore interaction functions
@@ -312,9 +313,11 @@ export async function getExpenses(): Promise<Expense[]> {
     return expenses.map(e => ({...e, date: new Date(e.date) }));
 }
 
-export const addExpense = async (expense: Omit<Expense, 'id'>, user: UserRole) => {
+export const addExpense = async (expense: Omit<Expense, 'id'>, user: UserRole | 'sistem') => {
     const newExpense = await addDocument<Expense>('expenses', expense);
-    await addActivityLog(user, `mencatat pengeluaran: "${newExpense.name}" sebesar ${formatCurrency(newExpense.amount)}`);
+    if(user !== 'sistem') {
+        await addActivityLog(user, `mencatat pengeluaran: "${newExpense.name}" sebesar ${formatCurrency(newExpense.amount)}`);
+    }
     return newExpense;
 };
 
@@ -593,6 +596,22 @@ export const clearData = async (dataToClear: Record<DataType, boolean>, user: Us
     await batch.commit();
     await addActivityLog(user, `menghapus data: ${collectionsToDelete.join(', ')}.`);
 };
+
+// Imported Files Functions
+export const hasImportedFile = async (fileName: string): Promise<boolean> => {
+    const q = query(collection(db, 'importedFiles'), where('name', '==', fileName));
+    const querySnapshot = await getDocs(q);
+    return !querySnapshot.empty;
+};
+
+export const addImportedFile = async (fileName: string): Promise<void> => {
+    const fileData: Omit<ImportedFile, 'id'> = {
+        name: fileName,
+        importedAt: new Date(),
+    };
+    await addDocument<ImportedFile>('importedFiles', fileData);
+};
+
 
 // Helper
 const formatCurrency = (amount: number) => {
