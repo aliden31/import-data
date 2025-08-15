@@ -6,7 +6,7 @@ import type { FC } from 'react';
 import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { DollarSign, ShoppingCart, TrendingUp, Package, Wallet, AreaChart, Settings, ArrowRight, Calculator, PlusSquare, FileAxis3d } from 'lucide-react';
+import { DollarSign, ShoppingCart, TrendingUp, Package, Wallet, AreaChart, Settings, ArrowRight, Calculator, PlusSquare, FileAxis3d, LayoutGrid, ClipboardList, ScrollText, Undo2, Zap, History, FileUp, Home } from 'lucide-react';
 import { ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Bar } from 'recharts';
 import type { Sale, Return, Product, Expense, OtherIncome } from '@/lib/types';
 import { getSales, getReturns, getProducts, getExpenses, getOtherIncomes } from '@/lib/data-service';
@@ -29,7 +29,8 @@ type View =
   | 'activity-log'
   | 'erp'
   | 'kalkulator-roas'
-  | 'pdf-converter';
+  | 'pdf-converter'
+  | 'sales-importer';
 
 interface ErpPageProps {
   onNavigate: (view: View) => void;
@@ -180,29 +181,9 @@ const ErpPage: FC<ErpPageProps> = React.memo(({ onNavigate }) => {
 
             {/* Module Cards */}
             <div className="grid gap-6 md:grid-cols-2">
-                <Card className="flex flex-col">
+                 <Card className="flex flex-col">
                     <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><Package/> Manajemen Produk & Stok</CardTitle>
-                        <CardDescription>Kelola inventaris, harga, dan stok produk Anda.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="flex-grow space-y-3">
-                        <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('produk')}>
-                            <span>Daftar Produk</span>
-                            <ArrowRight className="h-4 w-4"/>
-                        </Button>
-                        <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('stok-opname')}>
-                            <span>Stok Opname</span>
-                             <ArrowRight className="h-4 w-4"/>
-                        </Button>
-                         <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('flash-sale')}>
-                            <span>Manajemen Flash Sale</span>
-                             <ArrowRight className="h-4 w-4"/>
-                        </Button>
-                    </CardContent>
-                </Card>
-                <Card className="flex flex-col">
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><ShoppingCart/> Kasir & Penjualan</CardTitle>
+                        <CardTitle className="flex items-center gap-2"><LayoutGrid/> Kasir & Penjualan</CardTitle>
                         <CardDescription>Akses cepat ke modul kasir dan riwayat transaksi.</CardDescription>
                     </CardHeader>
                     <CardContent className="flex-grow space-y-3">
@@ -222,10 +203,34 @@ const ErpPage: FC<ErpPageProps> = React.memo(({ onNavigate }) => {
                 </Card>
                 <Card className="flex flex-col">
                     <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><AreaChart/> Laporan & Keuangan</CardTitle>
-                        <CardDescription>Analisis performa bisnis dan lacak pengeluaran.</CardDescription>
+                        <CardTitle className="flex items-center gap-2"><Package/> Produk & Stok</CardTitle>
+                        <CardDescription>Kelola inventaris, harga, stok, dan penjualan kilat.</CardDescription>
                     </CardHeader>
                     <CardContent className="flex-grow space-y-3">
+                        <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('produk')}>
+                            <span>Daftar Produk</span>
+                            <ArrowRight className="h-4 w-4"/>
+                        </Button>
+                        <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('stok-opname')}>
+                            <span>Stok Opname</span>
+                             <ArrowRight className="h-4 w-4"/>
+                        </Button>
+                         <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('flash-sale')}>
+                            <span>Manajemen Flash Sale</span>
+                             <ArrowRight className="h-4 w-4"/>
+                        </Button>
+                    </CardContent>
+                </Card>
+                <Card className="flex flex-col">
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2"><AreaChart/> Laporan & Keuangan</CardTitle>
+                        <CardDescription>Analisis performa bisnis dan lacak keuangan.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex-grow space-y-3">
+                         <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('dashboard')}>
+                            <span>Dasbor Utama</span>
+                             <ArrowRight className="h-4 w-4"/>
+                        </Button>
                         <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('laporan')}>
                             <span>Laporan Arus Kas</span>
                             <ArrowRight className="h-4 w-4"/>
@@ -235,31 +240,31 @@ const ErpPage: FC<ErpPageProps> = React.memo(({ onNavigate }) => {
                              <ArrowRight className="h-4 w-4"/>
                         </Button>
                         <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('pemasukan-lain')}>
-                            <span>Pemasukan Lain-lain</span>
+                            <span>Pemasukan Lain</span>
                             <ArrowRight className="h-4 w-4"/>
-                        </Button>
-                        <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('kalkulator-roas')}>
-                            <span>Kalkulator ROAS</span>
-                             <ArrowRight className="h-4 w-4"/>
-                        </Button>
-                         <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('dashboard')}>
-                            <span>Dasbor Rangkuman</span>
-                             <ArrowRight className="h-4 w-4"/>
                         </Button>
                     </CardContent>
                 </Card>
                 <Card className="flex flex-col">
                     <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><Settings/> Pengaturan & Sistem</CardTitle>
-                        <CardDescription>Konfigurasi aplikasi dan kelola data sistem.</CardDescription>
+                        <CardTitle className="flex items-center gap-2"><Settings/> Utilitas & Sistem</CardTitle>
+                        <CardDescription>Konfigurasi, impor data, dan kelola sistem.</CardDescription>
                     </CardHeader>
                     <CardContent className="flex-grow space-y-3">
-                        <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('pengaturan')}>
-                            <span>Pengaturan Umum</span>
-                            <ArrowRight className="h-4 w-4"/>
+                         <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('kalkulator-roas')}>
+                            <span>Kalkulator ROAS</span>
+                             <ArrowRight className="h-4 w-4"/>
                         </Button>
                          <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('pdf-converter')}>
-                            <span>Konverter PDF ke Excel</span>
+                            <span>PDF ke Excel</span>
+                            <ArrowRight className="h-4 w-4"/>
+                        </Button>
+                        <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('sales-importer')}>
+                            <span>Impor Penjualan</span>
+                             <ArrowRight className="h-4 w-4"/>
+                        </Button>
+                        <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('pengaturan')}>
+                            <span>Pengaturan Umum</span>
                             <ArrowRight className="h-4 w-4"/>
                         </Button>
                         <Button variant="outline" className="w-full justify-between" onClick={() => onNavigate('activity-log')}>
@@ -296,3 +301,4 @@ const ErpPage: FC<ErpPageProps> = React.memo(({ onNavigate }) => {
 
 ErpPage.displayName = 'ErpPage';
 export default ErpPage;
+
