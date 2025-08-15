@@ -61,7 +61,7 @@ async function getDocumentById<T>(collectionName: string, id: string): Promise<T
 }
 
 
-async function addDocument<T>(collectionName: string, data: Omit<T, 'id'>): Promise<T> {
+async function addDocument<T>(collectionName: string, data: Omit<T, 'id'>, id?: string): Promise<T> {
     const dataWithTimestamp: { [key: string]: any } = { ...data };
     Object.keys(dataWithTimestamp).forEach(key => {
         if (dataWithTimestamp[key] instanceof Date) {
@@ -69,7 +69,14 @@ async function addDocument<T>(collectionName: string, data: Omit<T, 'id'>): Prom
         }
     });
 
-  const docRef = await addDoc(collection(db, collectionName), dataWithTimestamp);
+  let docRef;
+  if (id) {
+    docRef = doc(db, collectionName, id);
+    await setDoc(docRef, dataWithTimestamp);
+  } else {
+    docRef = await addDoc(collection(db, collectionName), dataWithTimestamp);
+  }
+  
   const newDoc = await getDocumentById<T>(collectionName, docRef.id);
   if (!newDoc) {
     throw new Error("Failed to retrieve the new document.");
@@ -117,8 +124,8 @@ export const clearActivityLogs = async (user: UserRole): Promise<void> => {
 export const getProducts = () => getCollection<Product>('products');
 export const getProductById = (id: string) => getDocumentById<Product>('products', id);
 
-export const addProduct = async (product: Omit<Product, 'id'>, user: UserRole) => {
-    const newProduct = await addDocument<Product>('products', product);
+export const addProduct = async (product: Omit<Product, 'id'>, user: UserRole, id?: string) => {
+    const newProduct = await addDocument<Product>('products', product, id);
     await addActivityLog(user, `menambahkan produk baru: "${newProduct.name}"`);
     return newProduct;
 };

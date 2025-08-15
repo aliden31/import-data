@@ -259,15 +259,15 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                 if (!mappingValue) continue;
 
                 if (mappingValue === CREATE_NEW_PRODUCT_VALUE) {
-                     const productData = {
+                     const productData: Product = {
+                        id: item.sku,
                         name: item.name,
                         sellingPrice: item.price,
                         costPrice: 0,
                         stock: 0,
                         category: 'Impor',
-                        id: item.sku,
                     };
-                    const createdProduct = await addProduct(productData, userRole);
+                    const createdProduct = await addProduct(productData, userRole, productData.id);
                     newProductIds.set(item.sku, createdProduct.id);
                     updatedDbProducts.push(createdProduct);
                 } else {
