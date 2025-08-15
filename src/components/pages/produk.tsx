@@ -168,9 +168,9 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
             if (productsData.length === 0 && userRole === 'admin') {
                 toast({ title: "Database produk kosong", description: "Menginisialisasi dengan data sampel..." });
                 await addPlaceholderProducts();
-                productsData = await getProducts();
+                productsData = await getProducts(); // Re-fetch products after adding placeholders
                 toast({ title: "Inisialisasi berhasil", description: "Data produk sampel telah ditambahkan." });
-                onDataChange();
+                onDataChange(); // Notify parent of data change
             }
             
             setProducts(productsData);
