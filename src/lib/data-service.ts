@@ -132,12 +132,22 @@ export const addProduct = async (product: Omit<Product, 'id'>, user: UserRole, i
 
 export const updateProduct = async (id: string, productData: Partial<Product>, user: UserRole) => {
     const originalProduct = await getProductById(id);
-    if (originalProduct) {
-        await updateDocument<Product>('products', id, productData);
-        await addActivityLog(user, `memperbarui produk: "${originalProduct.name}"`);
-    } else {
-        throw new Error("Produk tidak ditemukan untuk diperbarui.");
+    if (!originalProduct) {
+       throw new Error("Produk tidak ditemukan untuk diperbarui.");
     }
+
+    // Explicitly create an object with only the fields to be updated.
+    // This prevents accidental overwrites and ensures even "0" values are sent.
+    const dataToUpdate: Partial<Product> = {};
+    if (productData.name !== undefined) dataToUpdate.name = productData.name;
+    if (productData.costPrice !== undefined) dataToUpdate.costPrice = productData.costPrice;
+    if (productData.sellingPrice !== undefined) dataToUpdate.sellingPrice = productData.sellingPrice;
+    if (productData.stock !== undefined) dataToUpdate.stock = productData.stock;
+    if (productData.category !== undefined) dataToUpdate.category = productData.category;
+    if (productData.subcategory !== undefined) dataToUpdate.subcategory = productData.subcategory;
+
+    await updateDocument<Product>('products', id, dataToUpdate);
+    await addActivityLog(user, `memperbarui produk: "${originalProduct.name}"`);
 };
 
 export const deleteProduct = async (id: string, user: UserRole) => {
