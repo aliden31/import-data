@@ -312,6 +312,7 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
                     <TableHeader>
                     <TableRow>
                         <TableHead>Nama Produk</TableHead>
+                        <TableHead>SKU Gudang</TableHead>
                         <TableHead>Kategori</TableHead>
                         <TableHead className="text-right">Harga Modal</TableHead>
                         <TableHead className="text-right">Harga Jual</TableHead>
@@ -329,6 +330,7 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
                         >
                             {product.name}
                         </TableCell>
+                        <TableCell className="text-muted-foreground">{product.id}</TableCell>
                         <TableCell>
                             {product.category}
                             {product.subcategory && <span className="text-muted-foreground text-xs"> / {product.subcategory}</span>}
@@ -389,3 +391,4 @@ ProdukPage.displayName = 'ProdukPage';
 export default ProdukPage;
 
     
+
