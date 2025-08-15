@@ -39,7 +39,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { getProducts, addProduct, updateProduct, deleteProduct, addPlaceholderProducts, getSales } from '@/lib/data-service';
+import { getProducts, addProduct, updateProduct, deleteProduct, getSales } from '@/lib/data-service';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface ProdukPageProps {

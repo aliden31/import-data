@@ -299,7 +299,13 @@ function AppPageContent() {
       case 'pdf-converter':
         return <PdfConverterPage />;
       case 'sales-importer':
-        return <SalesImporterPage onImportComplete={(items) => setCart(items)} userRole={userRole!} />;
+        return <SalesImporterPage 
+          onImportComplete={(items) => {
+            setCart(items);
+            refreshAllData(true);
+          }} 
+          userRole={userRole!} 
+        />;
       case 'flash-sale':
         return <FlashSalePage onSettingsSave={refreshAllData} userRole={userRole!} />;
       case 'pengaturan':

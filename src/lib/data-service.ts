@@ -130,11 +130,13 @@ export const addProduct = async (product: Omit<Product, 'id'>, user: UserRole, i
     return newProduct;
 };
 
-export const updateProduct = async (id: string, product: Partial<Product>, user: UserRole) => {
+export const updateProduct = async (id: string, productData: Partial<Product>, user: UserRole) => {
     const originalProduct = await getProductById(id);
     if (originalProduct) {
-        await updateDocument<Product>('products', id, product);
+        await updateDocument<Product>('products', id, productData);
         await addActivityLog(user, `memperbarui produk: "${originalProduct.name}"`);
+    } else {
+        throw new Error("Produk tidak ditemukan untuk diperbarui.");
     }
 };
 
@@ -146,18 +148,7 @@ export const deleteProduct = async (id: string, user: UserRole) => {
     }
 };
 
-export const addPlaceholderProducts = async () => {
-    const batch = writeBatch(db);
-    const productsCollection = collection(db, 'products');
-    
-    placeholderProducts.forEach(product => {
-        const docRef = doc(productsCollection); 
-        const { id, ...productData } = product;
-        batch.set(docRef, productData);
-    });
 
-    await batch.commit();
-}
 
 
 // Sale-specific functions
