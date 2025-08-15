@@ -314,6 +314,46 @@ export const deleteSale = async (sale: Sale, user: UserRole): Promise<void> => {
     await addActivityLog(user, `menghapus penjualan (ID: ...${sale.id.slice(-6)})`);
 };
 
+export const batchDeleteSales = async (sales: Sale[], user: UserRole): Promise<void> => {
+    await runTransaction(db, async (transaction) => {
+        const stockChanges: Record<string, number> = {};
+
+        // Aggregate all stock changes first
+        for (const sale of sales) {
+            for (const item of sale.items) {
+                if (!item.product || item.product.id === 'unknown') continue;
+                 stockChanges[item.product.id] = (stockChanges[item.product.id] || 0) + item.quantity;
+            }
+        }
+        
+        // Read all product docs
+        const productRefs = Object.keys(stockChanges).map(id => doc(db, "products", id));
+        const productDocs = await Promise.all(
+            productRefs.map(ref => transaction.get(ref))
+        );
+
+        // Apply stock updates
+        for (const productDoc of productDocs) {
+             if (productDoc.exists()) {
+                const productId = productDoc.id;
+                const currentStock = productDoc.data().stock || 0;
+                const change = stockChanges[productId] || 0;
+                const newStock = currentStock + change;
+                transaction.update(productDoc.ref, { stock: newStock });
+            }
+        }
+        
+        // Delete all selected sales
+        for (const sale of sales) {
+            const saleRef = doc(db, "sales", sale.id);
+            transaction.delete(saleRef);
+        }
+    });
+
+    await addActivityLog(user, `menghapus ${sales.length} transaksi penjualan secara massal.`);
+};
+
+
 
 // Expense-specific functions
 export async function getExpenses(): Promise<Expense[]> {
