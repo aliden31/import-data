@@ -4,6 +4,7 @@
 
 import type { FC } from 'react';
 import React, { useState, useEffect, useMemo } from 'react';
+import * as XLSX from 'xlsx';
 import { Button } from '@/components/ui/button';
 import {
   Table,
@@ -24,7 +25,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { Product, Sale, Settings, UserRole } from '@/lib/types';
-import { PlusCircle, Edit, Trash2, MoreHorizontal } from 'lucide-react';
+import { PlusCircle, Edit, Trash2, MoreHorizontal, FileDown } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import {
   AlertDialog,
@@ -200,7 +201,7 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
             case 'stok-tersedikit':
                 return a.stock - b.stock;
             case 'harga-terendah':
-                return a.sellingPrice - b.sellingPrice;
+                return a.sellingPrice - a.sellingPrice;
             case 'harga-tertinggi':
                 return b.sellingPrice - a.sellingPrice;
             default:
@@ -254,6 +255,42 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
       setFormOpen(true);
   }
 
+    const handleExport = () => {
+        const dataToExport = sortedProducts.map(p => ({
+            "Nama Produk": p.name,
+            "SKU Gudang": p.id,
+            "Kategori": p.category,
+            "Sub-Kategori": p.subcategory || '',
+            "Harga Modal": p.costPrice,
+            "Harga Jual": p.sellingPrice,
+            "Stok": p.stock,
+            "Terjual": p.salesCount || 0,
+        }));
+
+        const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Daftar Produk");
+
+        // Set column widths
+        const colWidths = [
+            { wch: 40 }, // Nama Produk
+            { wch: 25 }, // SKU Gudang
+            { wch: 15 }, // Kategori
+            { wch: 15 }, // Sub-Kategori
+            { wch: 15 }, // Harga Modal
+            { wch: 15 }, // Harga Jual
+            { wch: 10 }, // Stok
+            { wch: 10 }, // Terjual
+        ];
+        worksheet['!cols'] = colWidths;
+
+        XLSX.writeFile(workbook, "daftar_produk.xlsx");
+        toast({
+            title: "Ekspor Berhasil",
+            description: "File daftar produk sedang diunduh.",
+        });
+    };
+
   if (loading) {
     return <div>Memuat data produk...</div>
   }
@@ -269,10 +306,16 @@ const ProdukPage: FC<ProdukPageProps> = React.memo(({ onDataChange, userRole }) 
             <h1 className="text-2xl font-bold">Manajemen Produk</h1>
             <p className="text-muted-foreground">Kelola daftar produk, stok, dan harga Anda.</p>
         </div>
-        <Button onClick={() => handleOpenForm()} className="w-full md:w-auto">
-            <PlusCircle className="mr-2 h-4 w-4" />
-            Tambah Produk
-        </Button>
+        <div className="flex items-center gap-2">
+            <Button onClick={handleExport} variant="outline" className="w-full md:w-auto">
+                <FileDown className="mr-2 h-4 w-4" />
+                Export
+            </Button>
+            <Button onClick={() => handleOpenForm()} className="w-full md:w-auto">
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Tambah Produk
+            </Button>
+        </div>
       </div>
       
       <Card>
