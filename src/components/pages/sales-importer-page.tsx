@@ -335,7 +335,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                         price: item.price,
                         costPriceAtSale: productInfo.costPrice,
                     };
-                }).filter((i): i is SaleItem => i !== null);
+                }).filter((i): i is SaleItem => !!i);
                 
                 const subtotal = saleItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
                 const discount = publicSettings.defaultDiscount || 0;
