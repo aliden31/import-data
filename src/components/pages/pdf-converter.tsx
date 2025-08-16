@@ -22,7 +22,7 @@ const PdfConverterPage: FC = () => {
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         const selectedFile = event.target.files?.[0];
         if (selectedFile) {
-            if (selectedFile.type === 'application/pdf') {
+            if (selectedFile.type === 'application/pdf' || selectedFile.name.endsWith('.pdf')) {
                 setFile(selectedFile);
                 setState('idle');
                 setErrorMessage('');
@@ -37,12 +37,15 @@ const PdfConverterPage: FC = () => {
         }
     };
 
-    const handleConvert = async () => {
-        if (!file) return;
-
-        setState('analyzing');
-        setErrorMessage('');
-        setExcelDataB64('');
+    const handleConvert = () => {
+        if (!file) {
+            toast({
+                title: 'Tidak ada file',
+                description: 'Harap pilih file PDF terlebih dahulu.',
+                variant: 'destructive'
+            });
+            return;
+        }
         
         // Temporarily disable the feature as the AI flow is removed.
         toast({
@@ -51,7 +54,6 @@ const PdfConverterPage: FC = () => {
             variant: 'default'
         });
         setState('idle');
-
     };
 
     const handleDownload = () => {
