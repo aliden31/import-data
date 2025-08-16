@@ -307,7 +307,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             }
             
             const finalSales: Omit<Sale, 'id'>[] = salesToCreate.map(sale => {
-                const saleItems: SaleItem[] = sale.items.reduce((acc: SaleItem[], item: any) => {
+                const saleItems = sale.items.reduce((acc: SaleItem[], item: any) => {
                     let validItem: SaleItem | null = null;
                     let finalProductId: string | undefined;
                     let importSku = item.sku;
@@ -533,14 +533,16 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                             </ScrollArea>
                         </CardContent>
                     </Card>
-                    
-                    <div className="flex justify-end gap-4 mt-6">
-                       <Button variant="outline" onClick={resetState} disabled={analysisState === 'saving'}>Mulai Ulang</Button>
-                       <Button onClick={handleConfirmImport} disabled={analysisState === 'saving' || !isMappingComplete}>
-                           {analysisState === 'saving' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                           Konfirmasi & Catat Penjualan
-                       </Button>
-                   </div>
+                </div>
+            )}
+            
+            {analysisState === 'review' && (
+                 <div className="flex justify-end gap-4 mt-6">
+                    <Button variant="outline" onClick={resetState} disabled={analysisState === 'saving'}>Mulai Ulang</Button>
+                    <Button onClick={handleConfirmImport} disabled={analysisState === 'saving' || !isMappingComplete}>
+                        {analysisState === 'saving' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Konfirmasi & Catat Penjualan
+                    </Button>
                 </div>
             )}
         </div>
