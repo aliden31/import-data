@@ -1,2 +1,2 @@
-// Flows will be imported for their side effects in this file.
-import './flows/extract-sales-flow';
+// This file should be empty for Vercel builds to succeed.
+// Flows are imported dynamically by Next.js where needed.
