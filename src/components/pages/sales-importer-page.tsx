@@ -52,7 +52,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
     const [aggregatedItems, setAggregatedItems] = useState<AggregatedSaleItem[]>([]);
     const [unrecognizedItems, setUnrecognizedItems] = useState<AggregatedSaleItem[]>([]);
     const [productMappings, setProductMappings] = useState<Record<string, string>>({});
-    const [salesToCreate, setSalesToCreate] = useState<Omit<Sale, 'id'>[]>([]);
+    const [salesToCreate, setSalesToCreate] = useState<Omit<Sale, 'id' | 'displayId'>[]>([]);
 
     const isMappingComplete = useMemo(() => {
       return unrecognizedItems.every(item => productMappings[item.sku]);
@@ -304,7 +304,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             }
 
             const finalSales: Omit<Sale, 'id'>[] = salesToCreate.map(sale => {
-                const mappedItems = sale.items.map((item: any) => {
+                const saleItems = sale.items.map((item: any) => {
                     let finalProductId: string | undefined;
                     let importSku = item.sku;
                     const existingProduct = dbProducts.find(p => p.id.toLowerCase() === importSku.toLowerCase());
@@ -335,9 +335,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                         price: item.price,
                         costPriceAtSale: productInfo.costPrice,
                     };
-                });
-                
-                const saleItems = mappedItems.filter((i): i is SaleItem => !!i);
+                }).filter((i): i is SaleItem => !!i);
                 
                 const subtotal = saleItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
                 const discount = publicSettings.defaultDiscount || 0;
