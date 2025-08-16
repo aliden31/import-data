@@ -12,13 +12,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { extractSales } from '@/ai/flows/extract-sales-flow';
-import type { ExtractedSale, ExtractedSaleItem } from '@/ai/schemas/extract-sales-schema';
+import type { ExtractedSale } from '@/ai/schemas/extract-sales-schema';
 import { getProducts, addProduct, hasImportedFile, addImportedFile, addExpense, getSkuMappings, saveSkuMapping, batchAddSales, getPublicSettings } from '@/lib/data-service';
 import type { Product, UserRole, SaleItem, SkuMapping, PublicSettings, Sale } from '@/lib/types';
-import { FileQuestion, Loader2, Wand2, CheckCircle2, AlertCircle, Sparkles, FileSpreadsheet, ArrowLeft } from 'lucide-react';
+import { Loader2, Wand2, CheckCircle2, AlertCircle, Sparkles, FileSpreadsheet, ArrowLeft, FileUp } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
-import { useRouter } from 'next/navigation';
 
 const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.round(amount));
@@ -26,6 +25,7 @@ const formatCurrency = (amount: number) => {
 
 const CREATE_NEW_PRODUCT_VALUE = 'CREATE_NEW_PRODUCT';
 type AnalysisState = 'idle' | 'analyzing' | 'review' | 'saving' | 'error' | 'success';
+
 type AggregatedSaleItem = {
     sku: string;
     name: string;
@@ -38,6 +38,153 @@ interface SalesImporterPageProps {
     onImportComplete: () => void;
     userRole: UserRole;
 }
+
+const FileUploadCard = ({ onFileChange, onAnalyze, file, analysisState, errorMessage }: {
+    onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onAnalyze: () => void;
+    file: File | null;
+    analysisState: AnalysisState;
+    errorMessage: string;
+}) => (
+    <Card className="max-w-4xl mx-auto">
+        <CardHeader>
+            <CardTitle>Impor Penjualan dari File</CardTitle>
+            <CardDescription>
+                Unggah file Excel (disarankan), CSV, PDF, atau gambar (JPG, PNG). AI akan digunakan untuk PDF/gambar.
+            </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+            <div className="flex items-center gap-4">
+                <Input id="file-upload" type="file" onChange={onFileChange} accept=".csv,application/pdf,image/png,image/jpeg,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" disabled={analysisState === 'analyzing' || analysisState === 'saving'} />
+                <Button onClick={onAnalyze} disabled={!file || analysisState === 'analyzing' || analysisState === 'saving'}>
+                    {(analysisState === 'analyzing' || analysisState === 'saving') && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    {file?.type.includes('spreadsheet') ? <FileSpreadsheet className="mr-2 h-4 w-4" /> : <Wand2 className="mr-2 h-4 w-4" />}
+                    Proses File
+                </Button>
+            </div>
+            {errorMessage && (
+                <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Analisis Gagal</AlertTitle>
+                    <AlertDescription>{errorMessage}</AlertDescription>
+                </Alert>
+            )}
+        </CardContent>
+    </Card>
+);
+
+const ReviewAndMapping = ({ salesToCreate, totalQuantity, unrecognizedItems, productMappings, setProductMappings, aggregatedItems, sortedDbProducts }: {
+    salesToCreate: Omit<Sale, 'id'>[];
+    totalQuantity: number;
+    unrecognizedItems: AggregatedSaleItem[];
+    productMappings: Record<string, string>;
+    setProductMappings: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+    aggregatedItems: AggregatedSaleItem[];
+    sortedDbProducts: Product[];
+}) => (
+    <div className="space-y-6">
+        <Alert>
+            <Sparkles className="h-4 w-4" />
+            <AlertTitle>Hasil Analisis</AlertTitle>
+            <AlertDescription>
+                Sistem berhasil mengekstrak <span className="font-bold">{salesToCreate.length} transaksi</span> dengan total <span className="font-bold">{totalQuantity} item</span>.
+                Harap tinjau dan petakan produk yang tidak dikenali di bawah ini.
+            </AlertDescription>
+        </Alert>
+
+        {unrecognizedItems.length > 0 && (
+            <Card>
+                <CardHeader>
+                    <CardTitle className="text-lg flex items-center"><AlertCircle className="h-5 w-5 mr-2 text-amber-500" />Petakan Produk Tidak Dikenali</CardTitle>
+                    <CardDescription>Cocokkan SKU dari file impor dengan produk yang ada di database Anda atau buat yang baru.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <ScrollArea className="h-52">
+                        <div className="space-y-4 pr-4">
+                            {unrecognizedItems.map(item => (
+                                <div key={item.sku} className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 items-center">
+                                    <div>
+                                        <p className="font-semibold">{item.name}</p>
+                                        <p className="text-xs text-muted-foreground">SKU Impor: {item.sku}</p>
+                                    </div>
+                                    <Select
+                                        value={productMappings[item.sku] || ''}
+                                        onValueChange={value => setProductMappings(prev => ({ ...prev, [item.sku]: value }))}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Pilih Aksi..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value={CREATE_NEW_PRODUCT_VALUE}>
+                                                <span className="font-semibold text-primary">Buat Produk Baru (ID: {item.sku})</span>
+                                            </SelectItem>
+                                            {sortedDbProducts.map(p => (
+                                                <SelectItem key={p.id} value={p.id}>{p.name} ({p.id})</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            ))}
+                        </div>
+                    </ScrollArea>
+                </CardContent>
+            </Card>
+        )}
+
+        <Card>
+            <CardHeader>
+                <CardTitle className="text-lg flex items-center"><CheckCircle2 className="h-5 w-5 mr-2 text-green-500" />Ringkasan Impor</CardTitle>
+                <CardDescription>Ini adalah rincian item yang akan dicatat sebagai penjualan setelah konfirmasi.</CardDescription>
+            </CardHeader>
+            <CardContent>
+                <ScrollArea className="h-64 border rounded-md">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Nama Produk</TableHead>
+                                <TableHead>SKU</TableHead>
+                                <TableHead className="text-right">Jumlah</TableHead>
+                                <TableHead className="text-right">Harga Jual Satuan</TableHead>
+                                <TableHead className="text-right">Status</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {aggregatedItems.map((item, index) => (
+                                <TableRow key={index}>
+                                    <TableCell className="font-medium">{item.name}</TableCell>
+                                    <TableCell className="text-muted-foreground">{item.sku}</TableCell>
+                                    <TableCell className="text-right">{item.quantity}</TableCell>
+                                    <TableCell className="text-right">{formatCurrency(item.price)}</TableCell>
+                                    <TableCell className="text-right">
+                                        <Badge variant={item.isNew ? "secondary" : "default"}>{item.isNew ? "Baru" : "Dikenali"}</Badge>
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </ScrollArea>
+            </CardContent>
+        </Card>
+    </div>
+);
+
+const ActionButtons = ({ onReset, onConfirm, analysisState, isMappingComplete }: {
+    onReset: () => void;
+    onConfirm: () => void;
+    analysisState: AnalysisState;
+    isMappingComplete: boolean;
+}) => (
+     <div className="flex justify-end gap-4 mt-6">
+        <Button variant="outline" onClick={onReset} disabled={analysisState === 'saving'}>
+            Mulai Ulang
+        </Button>
+        <Button onClick={onConfirm} disabled={analysisState === 'saving' || !isMappingComplete}>
+            {analysisState === 'saving' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Konfirmasi & Catat Penjualan
+        </Button>
+    </div>
+)
+
 
 const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete, userRole }) => {
     const [file, setFile] = useState<File | null>(null);
@@ -55,7 +202,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
     const [salesToCreate, setSalesToCreate] = useState<Omit<Sale, 'id' | 'displayId'>[]>([]);
 
     const isMappingComplete = useMemo(() => {
-      return unrecognizedItems.every(item => productMappings[item.sku]);
+        return unrecognizedItems.every(item => productMappings[item.sku]);
     }, [unrecognizedItems, productMappings]);
 
     useEffect(() => {
@@ -76,7 +223,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
 
         allItems.forEach(item => {
             const skuKey = (item.sku || '').trim();
-            if (!skuKey) return; 
+            if (!skuKey) return;
 
             if (!itemsBySku.has(skuKey)) {
                 itemsBySku.set(skuKey, { totalQuantity: 0, lastPrice: item.price, name: item.name });
@@ -94,7 +241,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             const { totalQuantity, lastPrice, name } = aggregatedData;
             const dbProduct = dbProducts.find(p => p.id.toLowerCase() === skuKey.toLowerCase());
             const existingMapping = dbSkuMappings.find(m => m.importSku.toLowerCase() === skuKey.toLowerCase());
-            
+
             const isNew = !dbProduct;
 
             const aggregatedItem: AggregatedSaleItem = {
@@ -111,10 +258,10 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                 }
                 finalUnrecognizedItems.push(aggregatedItem);
             }
-            
+
             finalAggregatedItems.push(aggregatedItem);
         }
-        
+
         const finalSalesToCreate: Omit<Sale, 'id'>[] = sales.map(sale => {
             const subtotal = sale.items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
             const discount = publicSettings.defaultDiscount || 0;
@@ -134,7 +281,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
 
         setSalesToCreate(finalSalesToCreate);
         setProductMappings(initialMappings);
-        setAggregatedItems(finalAggregatedItems.sort((a,b) => a.name.localeCompare(b.name)));
+        setAggregatedItems(finalAggregatedItems.sort((a, b) => a.name.localeCompare(b.name)));
         setUnrecognizedItems(finalUnrecognizedItems);
         setAnalysisState('review');
     };
@@ -144,11 +291,11 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
         const selectedFile = event.target.files?.[0];
         if (selectedFile) {
             setFile(selectedFile);
-             setAnalysisState('idle');
-             setErrorMessage('');
+            setAnalysisState('idle');
+            setErrorMessage('');
         }
     };
-    
+
     const handleStructuredFileParse = (file: File) => {
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -173,7 +320,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                     const order = orders.get(orderId)!;
                     const quantity = Number(row['Jumlah'] || 0);
                     const price = Number(row['Harga Satuan'] || 0);
-                    
+
                     if (quantity > 0) {
                         order.items.push({
                             name: (row['Nama Produk'] || sku).toString(),
@@ -193,39 +340,39 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                     setAnalysisState('error');
                 }
             } catch (err) {
-                 setErrorMessage('Gagal memproses file. Pastikan formatnya benar.');
-                 setAnalysisState('error');
+                setErrorMessage('Gagal memproses file. Pastikan formatnya benar.');
+                setAnalysisState('error');
             }
         };
         reader.readAsArrayBuffer(file);
     };
 
     const handlePdfImageParse = async (file: File) => {
-         const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = async () => {
-                try {
-                    const result = await extractSales({ 
-                        fileDataUri: reader.result as string,
-                        products: dbProducts,
-                    });
-                    
-                    if (result && result.sales.length > 0) {
-                        processExtractedSales(result.sales); 
-                    } else {
-                        setErrorMessage('AI tidak dapat menemukan data penjualan di dalam file. Coba file lain atau pastikan formatnya jelas.');
-                        setAnalysisState('error');
-                    }
-                } catch (error) {
-                    console.error('Analysis failed:', error);
-                    setErrorMessage('Terjadi kesalahan saat menganalisis file. Lihat konsol untuk detail.');
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = async () => {
+            try {
+                const result = await extractSales({
+                    fileDataUri: reader.result as string,
+                    products: dbProducts,
+                });
+
+                if (result && result.sales.length > 0) {
+                    processExtractedSales(result.sales);
+                } else {
+                    setErrorMessage('AI tidak dapat menemukan data penjualan di dalam file. Coba file lain atau pastikan formatnya jelas.');
                     setAnalysisState('error');
                 }
-            };
-            reader.onerror = () => {
-                 setErrorMessage('Gagal membaca file. Silakan coba lagi.');
-                 setAnalysisState('error');
-            };
+            } catch (error) {
+                console.error('Analysis failed:', error);
+                setErrorMessage('Terjadi kesalahan saat menganalisis file. Lihat konsol untuk detail.');
+                setAnalysisState('error');
+            }
+        };
+        reader.onerror = () => {
+            setErrorMessage('Gagal membaca file. Silakan coba lagi.');
+            setAnalysisState('error');
+        };
     }
 
     const handleAnalyze = async () => {
@@ -233,7 +380,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
 
         setAnalysisState('analyzing');
         setErrorMessage('');
-        
+
         const isExcel = file.type.includes('spreadsheetml') || file.type.includes('csv') || file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv');
         const isImageOrPdf = file.type.startsWith('image/') || file.type === 'application/pdf';
 
@@ -268,7 +415,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                     description: `Otomatis membuat pengeluaran untuk ${salesToCreate.length} pesanan sebesar ${formatCurrency(resiExpense.amount)}.`,
                 });
             } else if (salesToCreate.length > 0 && fileAlreadyImported) {
-                 toast({
+                toast({
                     title: 'Pengeluaran Dilewati',
                     description: `Pengeluaran untuk file ini sudah pernah dibuat sebelumnya.`,
                     variant: 'default',
@@ -283,7 +430,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                 if (!mappingValue) continue;
 
                 if (mappingValue === CREATE_NEW_PRODUCT_VALUE) {
-                     const productData: Product = {
+                    const productData: Product = {
                         id: item.sku,
                         name: item.name,
                         sellingPrice: item.price,
@@ -297,23 +444,23 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                 } else {
                     const mappedProduct = dbProducts.find(p => p.id === mappingValue);
                     if (mappedProduct) {
-                       await saveSkuMapping({
-                           importSku: item.sku,
-                           mappedProductId: mappedProduct.id,
-                           mappedProductName: mappedProduct.name
-                       });
+                        await saveSkuMapping({
+                            importSku: item.sku,
+                            mappedProductId: mappedProduct.id,
+                            mappedProductName: mappedProduct.name
+                        });
                     }
                 }
             }
-            
+
             const finalSales: Omit<Sale, 'id'>[] = salesToCreate.map(sale => {
                 const saleItems = sale.items.reduce((acc: SaleItem[], item: any) => {
                     let validItem: SaleItem | null = null;
                     let finalProductId: string | undefined;
                     let importSku = item.sku;
-            
+
                     const existingProduct = updatedDbProducts.find(p => p.id.toLowerCase() === importSku.toLowerCase());
-            
+
                     if (existingProduct) {
                         finalProductId = existingProduct.id;
                     } else {
@@ -324,7 +471,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                             finalProductId = newProductIds.get(importSku);
                         }
                     }
-            
+
                     if (finalProductId) {
                         const productInfo = updatedDbProducts.find(p => p.id === finalProductId);
                         if (productInfo) {
@@ -346,10 +493,10 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                     if (validItem) {
                         acc.push(validItem);
                     }
-                    
+
                     return acc;
                 }, []);
-                
+
                 const subtotal = saleItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
                 const discount = publicSettings.defaultDiscount || 0;
                 const finalTotal = subtotal * (1 - discount / 100);
@@ -360,14 +507,14 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             }).filter(sale => sale.items.length > 0);
 
             if (finalSales.length > 0) {
-              await batchAddSales(finalSales, userRole);
+                await batchAddSales(finalSales, userRole);
             }
-            
+
             onImportComplete();
             setAnalysisState('success');
             toast({
-              title: "Impor Berhasil",
-              description: `${finalSales.length} transaksi baru dari file impor telah berhasil dicatat.`,
+                title: "Impor Berhasil",
+                description: `${finalSales.length} transaksi baru dari file impor telah berhasil dicatat.`,
             });
 
         } catch (error) {
@@ -393,12 +540,12 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
     }
 
     const totalQuantity = useMemo(() => aggregatedItems.reduce((sum, item) => sum + item.quantity, 0), [aggregatedItems]);
-    const sortedDbProducts = useMemo(() => [...dbProducts].sort((a,b) => a.name.localeCompare(b.name)), [dbProducts]);
+    const sortedDbProducts = useMemo(() => [...dbProducts].sort((a, b) => a.name.localeCompare(b.name)), [dbProducts]);
 
 
     if (analysisState === 'success') {
         return (
-             <div className="flex flex-col items-center justify-center text-center p-8 h-full">
+            <div className="flex flex-col items-center justify-center text-center p-8 h-full">
                 <CheckCircle2 className="h-16 w-16 text-green-500 mb-4" />
                 <h2 className="text-2xl font-bold mb-2">Impor Berhasil!</h2>
                 <p className="text-muted-foreground mb-6">
@@ -414,31 +561,13 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
 
     return (
         <div className="space-y-6">
-             <Card className="max-w-4xl mx-auto">
-                <CardHeader>
-                    <CardTitle>Impor Penjualan dari File</CardTitle>
-                    <CardDescription>
-                        Unggah file Excel (disarankan), CSV, PDF, atau gambar (JPG, PNG). AI akan digunakan untuk PDF/gambar.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                     <div className="flex items-center gap-4">
-                        <Input id="file-upload" type="file" onChange={handleFileChange} accept=".csv,application/pdf,image/png,image/jpeg,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" disabled={analysisState === 'analyzing' || analysisState === 'saving'}/>
-                        <Button onClick={handleAnalyze} disabled={!file || analysisState === 'analyzing' || analysisState === 'saving'}>
-                            {(analysisState === 'analyzing' || analysisState === 'saving') && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            {file?.type.includes('spreadsheet') ? <FileSpreadsheet className="mr-2 h-4 w-4"/> : <Wand2 className="mr-2 h-4 w-4"/>}
-                            Proses File
-                        </Button>
-                     </div>
-                      {errorMessage && (
-                         <Alert variant="destructive">
-                            <AlertCircle className="h-4 w-4" />
-                            <AlertTitle>Analisis Gagal</AlertTitle>
-                            <AlertDescription>{errorMessage}</AlertDescription>
-                        </Alert>
-                    )}
-                </CardContent>
-            </Card>
+            <FileUploadCard 
+                onFileChange={handleFileChange}
+                onAnalyze={handleAnalyze}
+                file={file}
+                analysisState={analysisState}
+                errorMessage={errorMessage}
+            />
 
             {(analysisState === 'analyzing' || analysisState === 'saving') && (
                 <div className="text-center py-10">
@@ -447,103 +576,25 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                     <p className="mt-2 text-sm text-muted-foreground">Harap tunggu, sistem sedang bekerja.</p>
                 </div>
             )}
-            
-            {analysisState === 'review' && (
-                <div className="space-y-6">
-                    <Alert>
-                        <Sparkles className="h-4 w-4" />
-                        <AlertTitle>Hasil Analisis</AlertTitle>
-                        <AlertDescription>
-                            Sistem berhasil mengekstrak <span className="font-bold">{salesToCreate.length} transaksi</span> dengan total <span className="font-bold">{totalQuantity} item</span>.
-                            Harap tinjau dan petakan produk yang tidak dikenali di bawah ini.
-                        </AlertDescription>
-                    </Alert>
-                    
-                    {unrecognizedItems.length > 0 && (
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-lg flex items-center"><AlertCircle className="h-5 w-5 mr-2 text-amber-500"/>Petakan Produk Tidak Dikenali</CardTitle>
-                                <CardDescription>Cocokkan SKU dari file impor dengan produk yang ada di database Anda atau buat yang baru.</CardDescription>
-                            </CardHeader>
-                            <CardContent>
-                                <ScrollArea className="h-52">
-                                    <div className="space-y-4 pr-4">
-                                    {unrecognizedItems.map(item => (
-                                        <div key={item.sku} className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 items-center">
-                                            <div>
-                                                <p className="font-semibold">{item.name}</p>
-                                                <p className="text-xs text-muted-foreground">SKU Impor: {item.sku}</p>
-                                            </div>
-                                            <Select 
-                                                value={productMappings[item.sku] || ''} 
-                                                onValueChange={value => setProductMappings(prev => ({...prev, [item.sku]: value}))}
-                                            >
-                                                <SelectTrigger>
-                                                    <SelectValue placeholder="Pilih Aksi..." />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value={CREATE_NEW_PRODUCT_VALUE}>
-                                                        <span className="font-semibold text-primary">Buat Produk Baru (ID: {item.sku})</span>
-                                                    </SelectItem>
-                                                    {sortedDbProducts.map(p => (
-                                                        <SelectItem key={p.id} value={p.id}>{p.name} ({p.id})</SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    ))}
-                                    </div>
-                                </ScrollArea>
-                            </CardContent>
-                        </Card>
-                    )}
 
-
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-lg flex items-center"><CheckCircle2 className="h-5 w-5 mr-2 text-green-500"/>Ringkasan Impor</CardTitle>
-                             <CardDescription>Ini adalah rincian item yang akan dicatat sebagai penjualan setelah konfirmasi.</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <ScrollArea className="h-64 border rounded-md">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Nama Produk</TableHead>
-                                            <TableHead>SKU</TableHead>
-                                            <TableHead className="text-right">Jumlah</TableHead>
-                                            <TableHead className="text-right">Harga Jual Satuan</TableHead>
-                                            <TableHead className="text-right">Status</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {aggregatedItems.map((item, index) => (
-                                            <TableRow key={index}>
-                                                <TableCell className="font-medium">{item.name}</TableCell>
-                                                <TableCell className="text-muted-foreground">{item.sku}</TableCell>
-                                                <TableCell className="text-right">{item.quantity}</TableCell>
-                                                <TableCell className="text-right">{formatCurrency(item.price)}</TableCell>
-                                                <TableCell className="text-right">
-                                                    <Badge variant={item.isNew ? "secondary" : "default"}>{item.isNew ? "Baru" : "Dikenali"}</Badge>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </ScrollArea>
-                        </CardContent>
-                    </Card>
-                </div>
-            )}
-            
             {analysisState === 'review' && (
-                 <div className="flex justify-end gap-4 mt-6">
-                    <Button variant="outline" onClick={resetState} disabled={analysisState === 'saving'}>Mulai Ulang</Button>
-                    <Button onClick={handleConfirmImport} disabled={analysisState === 'saving' || !isMappingComplete}>
-                        {analysisState === 'saving' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                        Konfirmasi & Catat Penjualan
-                    </Button>
-                </div>
+                <>
+                    <ReviewAndMapping
+                        salesToCreate={salesToCreate}
+                        totalQuantity={totalQuantity}
+                        unrecognizedItems={unrecognizedItems}
+                        productMappings={productMappings}
+                        setProductMappings={setProductMappings}
+                        aggregatedItems={aggregatedItems}
+                        sortedDbProducts={sortedDbProducts}
+                    />
+                    <ActionButtons
+                        onReset={resetState}
+                        onConfirm={handleConfirmImport}
+                        analysisState={analysisState}
+                        isMappingComplete={isMappingComplete}
+                    />
+                </>
             )}
         </div>
     );
