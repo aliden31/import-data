@@ -304,7 +304,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             }
 
             const finalSales: Omit<Sale, 'id'>[] = salesToCreate.map(sale => {
-                const saleItems = sale.items.map((item: any) => {
+                const mappedItems = sale.items.map((item: any) => {
                     let finalProductId: string | undefined;
                     let importSku = item.sku;
                     const existingProduct = dbProducts.find(p => p.id.toLowerCase() === importSku.toLowerCase());
@@ -335,7 +335,9 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                         price: item.price,
                         costPriceAtSale: productInfo.costPrice,
                     };
-                }).filter((i): i is SaleItem => !!i);
+                });
+                
+                const saleItems = mappedItems.filter((i): i is SaleItem => !!i);
                 
                 const subtotal = saleItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
                 const discount = publicSettings.defaultDiscount || 0;
