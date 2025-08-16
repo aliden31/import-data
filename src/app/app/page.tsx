@@ -58,6 +58,7 @@ import ErpPage from '@/components/pages/erp';
 import KalkulatorRoasPage from '@/components/pages/kalkulator-roas';
 import PdfConverterPage from '@/components/pages/pdf-converter';
 import SalesImporterPage from '@/components/pages/sales-importer-page';
+import SalesImporterReviewPage from '@/components/pages/sales-importer-review-page';
 import { SaleItem, Product, Settings as AppSettings, UserRole, FlashSale, Category, PublicSettings, Sale, Return } from '@/lib/types';
 import { getSettings, getFlashSaleSettings, getProducts, getPublicSettings, getSales, getReturns } from '@/lib/data-service';
 import { useToast } from '@/hooks/use-toast';
@@ -85,7 +86,8 @@ type View =
   | 'erp'
   | 'kalkulator-roas'
   | 'pdf-converter'
-  | 'sales-importer';
+  | 'sales-importer'
+  | 'sales-importer-review';
 
 const defaultSettings: AppSettings = { 
   storeName: 'Memuat...', 
@@ -234,11 +236,12 @@ function AppPageContent() {
     { id: 'flash-sale', label: 'Flash Sale', icon: Zap, roles: ['admin'] },
     { id: 'pengaturan', label: 'Pengaturan', icon: Settings, roles: ['admin', 'kasir'] },
     { id: 'activity-log', label: 'Log Aktivitas', icon: History, roles: ['admin'] },
+    { id: 'sales-importer-review', label: 'Review Impor', icon: FileUp, roles: ['admin'], hidden: true },
   ];
 
-  const menuItems = allMenuItems.filter(item => userRole && item.roles.includes(userRole));
+  const menuItems = allMenuItems.filter(item => userRole && item.roles.includes(item.id === 'sales-importer-review' ? 'admin' : userRole) && !item.hidden);
   
-  const activeMenu = menuItems.find(item => item.id === activeView);
+  const activeMenu = allMenuItems.find(item => item.id === activeView);
 
   const handleNavigate = (view: View) => {
     setActiveView(view);
@@ -301,8 +304,17 @@ function AppPageContent() {
         return <PdfConverterPage />;
       case 'sales-importer':
         return <SalesImporterPage 
-          onImportComplete={refreshAllData} 
+          onNavigateToReview={() => handleNavigate('sales-importer-review')} 
           userRole={userRole!} 
+        />;
+      case 'sales-importer-review':
+        return <SalesImporterReviewPage
+            onImportComplete={() => {
+                refreshAllData();
+                handleNavigate('penjualan');
+            }}
+            onCancel={() => handleNavigate('sales-importer')}
+            userRole={userRole!}
         />;
       case 'flash-sale':
         return <FlashSalePage onSettingsSave={refreshAllData} userRole={userRole!} />;
