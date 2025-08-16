@@ -304,7 +304,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             }
 
             const finalSales: Omit<Sale, 'id'>[] = salesToCreate.map(sale => {
-                const saleItems: SaleItem[] = sale.items.map((item: any) => {
+                const saleItems = sale.items.map((item: any) => {
                     let finalProductId: string | undefined;
                     let importSku = item.sku;
                     const existingProduct = dbProducts.find(p => p.id.toLowerCase() === importSku.toLowerCase());
@@ -535,3 +535,6 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
 
 export default SalesImporterPage;
 
+
+
+    
