@@ -187,8 +187,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             reader.onload = async () => {
                 try {
                     const fileDataUri = reader.result as string;
-                    const existingProducts = dbProducts.map(p => ({ id: p.id, name: p.name }));
-                    const result = await extractSales({ fileDataUri, products: existingProducts });
+                    const result = await extractSales({ fileDataUri });
                     
                     if (result && result.sales.length > 0) {
                         const allItems = result.sales.flatMap(s => s.items);
