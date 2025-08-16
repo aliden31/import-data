@@ -177,61 +177,76 @@ export const getSales = async (): Promise<Sale[]> => {
 export const getSaleById = (id: string) => getDocumentById<Sale>('sales', id);
 
 export const addSale = async (sale: Omit<Sale, 'id'>, user: UserRole): Promise<Sale> => {
-    const productRefs = sale.items.map(item => doc(db, 'products', item.product.id));
+    return (await batchAddSales([sale], user))[0];
+}
+
+
+export const batchAddSales = async (sales: Omit<Sale, 'id'>[], user: UserRole): Promise<Sale[]> => {
+    const stockChanges: Record<string, number> = {};
     
-    let newSaleId = '';
-    const newSale = await runTransaction(db, async (transaction) => {
+    // Aggregate all stock changes from all sales
+    for (const sale of sales) {
+        for (const item of sale.items) {
+            stockChanges[item.product.id] = (stockChanges[item.product.id] || 0) + item.quantity;
+        }
+    }
+
+    // Run a single transaction for all operations
+    const newSales = await runTransaction(db, async (transaction) => {
+        const productRefs = Object.keys(stockChanges).map(productId => doc(db, 'products', productId));
         const productDocs = await Promise.all(productRefs.map(ref => transaction.get(ref)));
         const productsData: Record<string, Product> = {};
+
         for (const docSnap of productDocs) {
             if (docSnap.exists()) {
                 productsData[docSnap.id] = { id: docSnap.id, ...docSnap.data() } as Product;
-            } else {
-                // Find which product name is missing
-                const missingProductId = docSnap.ref.id;
-                const missingItem = sale.items.find(i => i.product.id === missingProductId);
-                throw new Error(`Produk "${missingItem?.product.name || missingProductId}" tidak ditemukan.`);
             }
         }
 
-        // Create a clean object for Firestore without displayId
-        const saleDataForFirestore = {
-            items: sale.items.map(item => ({
-                product: {
-                    id: item.product.id,
-                    name: item.product.name,
-                    category: item.product.category,
-                    subcategory: item.product.subcategory || '',
-                    costPrice: item.product.costPrice,
-                },
-                quantity: item.quantity,
-                price: item.price,
-                costPriceAtSale: productsData[item.product.id].costPrice,
-            })),
-            subtotal: sale.subtotal,
-            discount: sale.discount,
-            finalTotal: sale.finalTotal,
-            date: Timestamp.fromDate(sale.date)
-        };
-        
+        // Update stock for all affected products
+        for (const productId in stockChanges) {
+            if (productsData[productId]) {
+                const productRef = doc(db, "products", productId);
+                const productData = productsData[productId];
+                const newStock = productData.stock - stockChanges[productId];
+                transaction.update(productRef, { stock: newStock });
+            } else {
+                console.warn(`Product with ID ${productId} not found. Stock not updated.`);
+            }
+        }
 
-        const saleRef = doc(collection(db, "sales"));
-        newSaleId = saleRef.id;
-        transaction.set(saleRef, saleDataForFirestore);
-
-        for (const item of sale.items) {
-            const productRef = doc(db, "products", item.product.id);
-            const productData = productsData[item.product.id];
-            const newStock = productData.stock - item.quantity;
-            transaction.update(productRef, { stock: newStock });
+        const createdSales: Sale[] = [];
+        // Create new sale documents
+        for (const sale of sales) {
+            const saleRef = doc(collection(db, "sales"));
+            const saleDataForFirestore = {
+                items: sale.items.map(item => ({
+                    product: {
+                        id: item.product.id,
+                        name: item.product.name,
+                        category: item.product.category,
+                        subcategory: item.product.subcategory || '',
+                        costPrice: item.product.costPrice,
+                    },
+                    quantity: item.quantity,
+                    price: item.price,
+                    costPriceAtSale: productsData[item.product.id]?.costPrice ?? item.costPriceAtSale,
+                })),
+                subtotal: sale.subtotal,
+                discount: sale.discount,
+                finalTotal: sale.finalTotal,
+                date: Timestamp.fromDate(sale.date)
+            };
+            transaction.set(saleRef, saleDataForFirestore);
+            createdSales.push({ ...sale, id: saleRef.id });
         }
         
-        return { ...sale, id: saleRef.id };
+        return createdSales;
     });
 
-    await addActivityLog(user, `mencatat penjualan baru (ID: ...${newSaleId.slice(-6)}) dengan total ${formatCurrency(sale.finalTotal)}`);
-    return newSale;
-}
+    await addActivityLog(user, `mencatat ${newSales.length} penjualan baru dari impor file.`);
+    return newSales;
+};
 
 
 export const updateSale = async (originalSale: Sale, updatedSaleData: Sale, user: UserRole): Promise<void> => {

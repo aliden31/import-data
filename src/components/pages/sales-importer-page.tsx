@@ -12,9 +12,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { extractSales } from '@/ai/flows/extract-sales-flow';
-import type { ExtractedSaleItem } from '@/ai/schemas/extract-sales-schema';
-import { getProducts, addProduct, hasImportedFile, addImportedFile, addExpense, getSkuMappings, saveSkuMapping, addSale, getPublicSettings } from '@/lib/data-service';
-import type { Product, UserRole, SaleItem, SkuMapping, PublicSettings } from '@/lib/types';
+import type { ExtractedSale } from '@/ai/schemas/extract-sales-schema';
+import { getProducts, addProduct, hasImportedFile, addImportedFile, addExpense, getSkuMappings, saveSkuMapping, batchAddSales, getPublicSettings } from '@/lib/data-service';
+import type { Product, UserRole, SaleItem, SkuMapping, PublicSettings, Sale } from '@/lib/types';
 import { FileQuestion, Loader2, Wand2, CheckCircle2, AlertCircle, Sparkles, FileSpreadsheet, ArrowLeft } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
@@ -48,11 +48,11 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
     const [errorMessage, setErrorMessage] = useState('');
     const { toast } = useToast();
 
+    // Data from analysis
     const [aggregatedItems, setAggregatedItems] = useState<AggregatedSaleItem[]>([]);
     const [unrecognizedItems, setUnrecognizedItems] = useState<AggregatedSaleItem[]>([]);
-    const [matchedProducts, setMatchedProducts] = useState<Map<string, Product>>(new Map());
     const [productMappings, setProductMappings] = useState<Record<string, string>>({});
-    const [orderCount, setOrderCount] = useState(0);
+    const [salesToCreate, setSalesToCreate] = useState<Omit<Sale, 'id'>[]>([]);
 
     const isMappingComplete = useMemo(() => {
       return unrecognizedItems.every(item => productMappings[item.sku]);
@@ -70,26 +70,24 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
         fetchInitialData();
     }, []);
 
-    const processExtractedItems = (items: ExtractedSaleItem[], uniqueOrderCount: number = 0) => {
-        const itemsBySku = new Map<string, { totalQuantity: number; lastPrice: number; name: string; originalItems: ExtractedSaleItem[] }>();
-        setOrderCount(uniqueOrderCount);
+    const processExtractedSales = (sales: ExtractedSale[]) => {
+        const allItems = sales.flatMap(s => s.items);
+        const itemsBySku = new Map<string, { totalQuantity: number; lastPrice: number; name: string }>();
 
-        items.forEach(item => {
+        allItems.forEach(item => {
             const skuKey = (item.sku || '').trim();
             if (!skuKey) return; 
 
             if (!itemsBySku.has(skuKey)) {
-                itemsBySku.set(skuKey, { totalQuantity: 0, lastPrice: item.price, name: item.name, originalItems: [] });
+                itemsBySku.set(skuKey, { totalQuantity: 0, lastPrice: item.price, name: item.name });
             }
             const existing = itemsBySku.get(skuKey)!;
             existing.totalQuantity += item.quantity;
-            existing.lastPrice = item.price; // Always update to the latest price found
-            existing.originalItems.push(item);
+            existing.lastPrice = item.price;
         });
 
         const finalAggregatedItems: AggregatedSaleItem[] = [];
         const finalUnrecognizedItems: AggregatedSaleItem[] = [];
-        const finalMatchedProducts = new Map<string, Product>();
         const initialMappings: Record<string, string> = {};
 
         for (const [skuKey, aggregatedData] of itemsBySku.entries()) {
@@ -97,13 +95,13 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             const dbProduct = dbProducts.find(p => p.id.toLowerCase() === skuKey.toLowerCase());
             const existingMapping = dbSkuMappings.find(m => m.importSku.toLowerCase() === skuKey.toLowerCase());
             
-            let isNew = !dbProduct;
+            const isNew = !dbProduct;
 
             const aggregatedItem: AggregatedSaleItem = {
                 sku: skuKey,
                 name,
                 quantity: totalQuantity,
-                price: lastPrice, // Use the last found price
+                price: lastPrice,
                 isNew,
             };
 
@@ -112,17 +110,15 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                     initialMappings[skuKey] = existingMapping.mappedProductId;
                 }
                 finalUnrecognizedItems.push(aggregatedItem);
-            } else {
-                finalMatchedProducts.set(skuKey, dbProduct!);
             }
             
             finalAggregatedItems.push(aggregatedItem);
         }
         
+        setSalesToCreate(sales);
         setProductMappings(initialMappings);
         setAggregatedItems(finalAggregatedItems.sort((a,b) => a.name.localeCompare(b.name)));
         setUnrecognizedItems(finalUnrecognizedItems);
-        setMatchedProducts(finalMatchedProducts);
         setAnalysisState('review');
     };
 
@@ -146,31 +142,37 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                 const worksheet = workbook.Sheets[sheetName];
                 const json = XLSX.utils.sheet_to_json(worksheet) as any[];
 
-                const uniqueOrders = new Set<string>();
+                const orders = new Map<string, ExtractedSale>();
 
-                const items: ExtractedSaleItem[] = json
-                    .map((row) => {
-                        const sku = (row['SKU Gudang'] || '').toString().trim();
-                        if (!sku) return null;
-                        
-                        const orderNumber = (row['Nomor Pesanan'] || '').toString().trim();
-                        if(orderNumber) {
-                            uniqueOrders.add(orderNumber);
-                        }
-                        return {
+                json.forEach((row, index) => {
+                    const orderId = (row['Nomor Pesanan'] || `excel-row-${index}`).toString().trim();
+                    const sku = (row['SKU Gudang'] || '').toString().trim();
+                    if (!sku) return;
+
+                    if (!orders.has(orderId)) {
+                        orders.set(orderId, { items: [], total: 0 });
+                    }
+
+                    const order = orders.get(orderId)!;
+                    const quantity = Number(row['Jumlah'] || 0);
+                    const price = Number(row['Harga Satuan'] || 0);
+                    
+                    if (quantity > 0) {
+                        order.items.push({
                             name: (row['Nama SKU'] || sku).toString(),
                             sku: sku,
-                            quantity: Number(row['Jumlah'] || 0),
-                            price: Number(row['Harga Satuan'] || 0),
-                        };
-                    })
-                    .filter((item): item is ExtractedSaleItem => item !== null && item.quantity > 0);
+                            quantity: quantity,
+                            price: price,
+                        });
+                        order.total += price * quantity;
+                    }
+                });
 
-
-                if (items.length > 0) {
-                    processExtractedItems(items, uniqueOrders.size);
+                const extractedSales = Array.from(orders.values());
+                if (extractedSales.length > 0) {
+                    processExtractedSales(extractedSales);
                 } else {
-                    setErrorMessage('Format file tidak sesuai atau tidak ada data yang valid. Pastikan ada kolom "SKU Gudang".');
+                    setErrorMessage('Format file tidak sesuai atau tidak ada data yang valid. Pastikan ada kolom "Nomor Pesanan", "SKU Gudang", "Jumlah", dan "Harga Satuan".');
                     setAnalysisState('error');
                 }
             } catch (err) {
@@ -186,12 +188,10 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             reader.readAsDataURL(file);
             reader.onload = async () => {
                 try {
-                    const fileDataUri = reader.result as string;
-                    const result = await extractSales({ fileDataUri });
+                    const result = await extractSales({ fileDataUri: reader.result as string });
                     
                     if (result && result.sales.length > 0) {
-                        const allItems = result.sales.flatMap(s => s.items);
-                        processExtractedItems(allItems); 
+                        processExtractedSales(result.sales); 
                     } else {
                         setErrorMessage('AI tidak dapat menemukan data penjualan di dalam file. Coba file lain atau pastikan formatnya jelas.');
                         setAnalysisState('error');
@@ -225,15 +225,15 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
     };
 
     const handleConfirmImport = async () => {
-        if (!file) return;
+        if (!file || salesToCreate.length === 0) return;
         setAnalysisState('saving');
         try {
             const fileAlreadyImported = await hasImportedFile(file.name);
 
-            if (orderCount > 0 && !fileAlreadyImported) {
+            if (salesToCreate.length > 0 && !fileAlreadyImported) {
                 const resiExpense = {
                     name: `Biaya Resi Marketplace - ${file.name}`,
-                    amount: orderCount * 1250,
+                    amount: salesToCreate.length * 1250,
                     category: 'Operasional',
                     date: new Date(),
                     subcategory: 'Biaya Pengiriman'
@@ -242,9 +242,9 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                 await addImportedFile(file.name);
                 toast({
                     title: 'Pengeluaran Pesanan Dibuat',
-                    description: `Otomatis membuat pengeluaran untuk ${orderCount} pesanan sebesar ${formatCurrency(resiExpense.amount)}.`,
+                    description: `Otomatis membuat pengeluaran untuk ${salesToCreate.length} pesanan sebesar ${formatCurrency(resiExpense.amount)}.`,
                 });
-            } else if (orderCount > 0 && fileAlreadyImported) {
+            } else if (salesToCreate.length > 0 && fileAlreadyImported) {
                  toast({
                     title: 'Pengeluaran Dilewati',
                     description: `Pengeluaran untuk file ini sudah pernah dibuat sebelumnya.`,
@@ -283,60 +283,55 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                 }
             }
 
-            const saleItems: SaleItem[] = aggregatedItems.map(item => {
-                const dbProduct = matchedProducts.get(item.sku);
-                let finalProductId = dbProduct?.id;
+            const finalSales: Omit<Sale, 'id'>[] = salesToCreate.map(sale => {
+                const saleItems: SaleItem[] = sale.items.map(item => {
+                    let finalProductId: string | undefined;
+                    const existingProduct = dbProducts.find(p => p.id.toLowerCase() === item.sku.toLowerCase());
 
-                if (item.isNew) {
-                    const mappedId = productMappings[item.sku];
-                    if(mappedId && mappedId !== CREATE_NEW_PRODUCT_VALUE) {
-                        finalProductId = mappedId;
-                    } else if (newProductIds.has(item.sku)) {
-                        finalProductId = newProductIds.get(item.sku);
-                    } else if (productMappings[item.sku] === CREATE_NEW_PRODUCT_VALUE) {
-                        finalProductId = item.sku;
+                    if (existingProduct) {
+                        finalProductId = existingProduct.id;
+                    } else {
+                         const mappedId = productMappings[item.sku];
+                        if(mappedId && mappedId !== CREATE_NEW_PRODUCT_VALUE) {
+                            finalProductId = mappedId;
+                        } else if (newProductIds.has(item.sku)) {
+                            finalProductId = newProductIds.get(item.sku);
+                        } else if (productMappings[item.sku] === CREATE_NEW_PRODUCT_VALUE) {
+                            finalProductId = item.sku;
+                        }
                     }
-                }
 
-                if (!finalProductId) return null;
+                    if (!finalProductId) return null;
+                    const productInfo = updatedDbProducts.find(p => p.id === finalProductId);
+                    if (!productInfo) return null;
 
-                const productInfo = updatedDbProducts.find(p => p.id === finalProductId);
-
-                if (!productInfo) return null;
+                    return {
+                        product: {
+                            id: productInfo.id, name: productInfo.name, category: productInfo.category,
+                            subcategory: productInfo.subcategory, costPrice: productInfo.costPrice,
+                        },
+                        quantity: item.quantity,
+                        price: item.price,
+                        costPriceAtSale: productInfo.costPrice,
+                    };
+                }).filter((i): i is SaleItem => i !== null);
+                
+                const subtotal = saleItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
+                const discount = publicSettings.defaultDiscount || 0;
+                const finalTotal = subtotal * (1 - discount / 100);
 
                 return {
-                    product: {
-                        id: productInfo.id,
-                        name: productInfo.name,
-                        category: productInfo.category,
-                        subcategory: productInfo.subcategory,
-                        costPrice: productInfo.costPrice,
-                    },
-                    quantity: item.quantity,
-                    price: item.price,
-                    costPriceAtSale: productInfo.costPrice,
+                    items: saleItems, subtotal, discount, finalTotal, date: new Date(),
                 };
-            }).filter((i): i is NonNullable<typeof i> => i !== null);
-            
-            const subtotal = saleItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
-            const discount = publicSettings.defaultDiscount || 0;
-            const finalTotal = subtotal * (1 - discount / 100);
+            });
 
-            const newSale = {
-                items: saleItems,
-                subtotal,
-                discount,
-                finalTotal,
-                date: new Date(),
-            };
-
-            await addSale(newSale, userRole);
+            await batchAddSales(finalSales, userRole);
             
             onImportComplete();
             setAnalysisState('success');
             toast({
-              title: "Penjualan Berhasil Dicatat",
-              description: `Transaksi baru dari file impor telah berhasil dibuat.`,
+              title: "Impor Berhasil",
+              description: `${finalSales.length} transaksi baru dari file impor telah berhasil dicatat.`,
             });
 
         } catch (error) {
@@ -358,6 +353,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
         setUnrecognizedItems([]);
         setProductMappings({});
         setErrorMessage('');
+        setSalesToCreate([]);
     }
 
     const totalQuantity = useMemo(() => aggregatedItems.reduce((sum, item) => sum + item.quantity, 0), [aggregatedItems]);
@@ -370,7 +366,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                 <CheckCircle2 className="h-16 w-16 text-green-500 mb-4" />
                 <h2 className="text-2xl font-bold mb-2">Impor Berhasil!</h2>
                 <p className="text-muted-foreground mb-6">
-                    {totalQuantity} item telah berhasil dicatat sebagai penjualan baru.
+                    {salesToCreate.length} transaksi telah berhasil dicatat sebagai penjualan baru.
                 </p>
                 <Button onClick={resetState}>
                     <ArrowLeft className="mr-2 h-4 w-4" />
@@ -422,8 +418,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                         <Sparkles className="h-4 w-4" />
                         <AlertTitle>Hasil Analisis</AlertTitle>
                         <AlertDescription>
-                            Sistem berhasil mengekstrak total <span className="font-bold">{totalQuantity} item</span> dari <span className="font-bold">{aggregatedItems.length} jenis produk</span>.
-                            {orderCount > 0 && ` Ditemukan ${orderCount} pesanan unik.`}
+                            Sistem berhasil mengekstrak <span className="font-bold">{salesToCreate.length} transaksi</span> dengan total <span className="font-bold">{totalQuantity} item</span>.
                             Harap tinjau dan petakan produk yang tidak dikenali di bawah ini.
                         </AlertDescription>
                     </Alert>
@@ -504,7 +499,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                     </Card>
 
                      <div className="flex justify-end gap-4 mt-6">
-                        <Button variant="outline" onClick={resetState}>Mulai Ulang</Button>
+                        <Button variant="outline" onClick={resetState} disabled={analysisState === 'saving'}>Mulai Ulang</Button>
                         <Button onClick={handleConfirmImport} disabled={analysisState === 'saving' || !isMappingComplete}>
                             {analysisState === 'saving' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                             Konfirmasi & Catat Penjualan
