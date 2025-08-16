@@ -234,9 +234,12 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
         setAnalysisState('analyzing');
         setErrorMessage('');
         
-        if(file.type.includes('spreadsheetml') || file.type.includes('csv') || file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv')) {
+        const isExcel = file.type.includes('spreadsheetml') || file.type.includes('csv') || file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv');
+        const isImageOrPdf = file.type.startsWith('image/') || file.type === 'application/pdf';
+
+        if (isExcel) {
             handleStructuredFileParse(file);
-        } else if (file.type.startsWith('image/') || file.type === 'application/pdf') {
+        } else if (isImageOrPdf) {
             await handlePdfImageParse(file);
         } else {
             setErrorMessage('Tipe file tidak didukung. Harap unggah file Excel, CSV, PDF, atau gambar.');
