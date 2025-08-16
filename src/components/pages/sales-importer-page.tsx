@@ -304,16 +304,17 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             }
 
             const finalSales: Omit<Sale, 'id'>[] = salesToCreate.map(sale => {
-                const saleItems: SaleItem[] = sale.items.map((item: any) => {
+                const saleItems: SaleItem[] = sale.items.reduce((acc: SaleItem[], item: any) => {
                     let finalProductId: string | undefined;
                     let importSku = item.sku;
                     const existingProduct = dbProducts.find(p => p.id.toLowerCase() === importSku.toLowerCase());
-
+                    let validItem: SaleItem | null = null;
+            
                     if (existingProduct) {
                         finalProductId = existingProduct.id;
                     } else {
-                         const mappedId = productMappings[importSku];
-                        if(mappedId && mappedId !== CREATE_NEW_PRODUCT_VALUE) {
+                        const mappedId = productMappings[importSku];
+                        if (mappedId && mappedId !== CREATE_NEW_PRODUCT_VALUE) {
                             finalProductId = mappedId;
                         } else if (newProductIds.has(importSku)) {
                             finalProductId = newProductIds.get(importSku);
@@ -321,21 +322,31 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                             finalProductId = importSku;
                         }
                     }
-
-                    if (!finalProductId) return null;
-                    const productInfo = updatedDbProducts.find(p => p.id === finalProductId);
-                    if (!productInfo) return null;
-
-                    return {
-                        product: {
-                            id: productInfo.id, name: productInfo.name, category: productInfo.category,
-                            subcategory: productInfo.subcategory, costPrice: productInfo.costPrice,
-                        },
-                        quantity: item.quantity,
-                        price: item.price,
-                        costPriceAtSale: productInfo.costPrice,
-                    };
-                }).filter((i): i is SaleItem => !!i);
+            
+                    if (finalProductId) {
+                        const productInfo = updatedDbProducts.find(p => p.id === finalProductId);
+                        if (productInfo) {
+                            validItem = {
+                                product: {
+                                    id: productInfo.id,
+                                    name: productInfo.name,
+                                    category: productInfo.category,
+                                    subcategory: productInfo.subcategory,
+                                    costPrice: productInfo.costPrice,
+                                },
+                                quantity: item.quantity,
+                                price: item.price,
+                                costPriceAtSale: productInfo.costPrice,
+                            };
+                        }
+                    }
+            
+                    if (validItem) {
+                        acc.push(validItem);
+                    }
+            
+                    return acc;
+                }, []);
                 
                 const subtotal = saleItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
                 const discount = publicSettings.defaultDiscount || 0;
@@ -535,6 +546,9 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
 
 export default SalesImporterPage;
 
+
+
+    
 
 
     
