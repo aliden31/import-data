@@ -9,7 +9,6 @@ import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { Upload, FileDown, Loader2, AlertCircle } from 'lucide-react';
-import { convertPdfToExcel } from '@/ai/flows/pdf-to-excel-flow';
 
 type ConverterState = 'idle' | 'analyzing' | 'success' | 'error';
 
@@ -44,35 +43,14 @@ const PdfConverterPage: FC = () => {
         setState('analyzing');
         setErrorMessage('');
         setExcelDataB64('');
+        
+        toast({
+            title: 'Fitur Belum Tersedia',
+            description: 'Fitur konversi PDF ke Excel sedang dalam pengembangan.',
+            variant: 'default'
+        });
+        setState('idle');
 
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = async () => {
-            try {
-                const fileDataUri = reader.result as string;
-                const result = await convertPdfToExcel({ fileDataUri });
-
-                if (result.excelDataB64) {
-                    setExcelDataB64(result.excelDataB64);
-                    setState('success');
-                    toast({
-                        title: 'Konversi Berhasil',
-                        description: 'File Excel Anda siap untuk diunduh.',
-                    });
-                } else {
-                    setErrorMessage(result.error || 'AI tidak dapat menemukan data penjualan di dalam file. Coba file lain atau pastikan formatnya jelas.');
-                    setState('error');
-                }
-            } catch (error) {
-                console.error('Conversion failed:', error);
-                setErrorMessage('Terjadi kesalahan saat menganalisis file. Lihat konsol untuk detail.');
-                setState('error');
-            }
-        };
-        reader.onerror = () => {
-            setErrorMessage('Gagal membaca file. Silakan coba lagi.');
-            setState('error');
-        };
     };
 
     const handleDownload = () => {
@@ -134,5 +112,3 @@ const PdfConverterPage: FC = () => {
 };
 
 export default PdfConverterPage;
-
-    
