@@ -44,6 +44,7 @@ const PdfConverterPage: FC = () => {
         setErrorMessage('');
         setExcelDataB64('');
         
+        // Temporarily disable the feature as the AI flow is removed.
         toast({
             title: 'Fitur Belum Tersedia',
             description: 'Fitur konversi PDF ke Excel sedang dalam pengembangan.',
