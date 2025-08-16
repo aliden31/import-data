@@ -454,7 +454,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             }
 
             const finalSales: Omit<Sale, 'id'>[] = salesToCreate.map(sale => {
-                const saleItems = sale.items.reduce((acc: SaleItem[], item: any) => {
+                const saleItems: SaleItem[] = sale.items.reduce((acc: SaleItem[], item: any) => {
                     let validItem: SaleItem | null = null;
                     let finalProductId: string | undefined;
                     let importSku = item.sku;
@@ -492,8 +492,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
 
                     if (validItem) {
                         acc.push(validItem);
-                    }
-
+    }
                     return acc;
                 }, []);
 
@@ -578,7 +577,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             )}
 
             {analysisState === 'review' && (
-                <>
+                 <>
                     <ReviewAndMapping
                         salesToCreate={salesToCreate}
                         totalQuantity={totalQuantity}
