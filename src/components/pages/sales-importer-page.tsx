@@ -39,153 +39,6 @@ interface SalesImporterPageProps {
     userRole: UserRole;
 }
 
-const FileUploadCard = ({ onFileChange, onAnalyze, file, analysisState, errorMessage }: {
-    onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-    onAnalyze: () => void;
-    file: File | null;
-    analysisState: AnalysisState;
-    errorMessage: string;
-}) => (
-    <Card className="max-w-4xl mx-auto">
-        <CardHeader>
-            <CardTitle>Impor Penjualan dari File</CardTitle>
-            <CardDescription>
-                Unggah file Excel (disarankan), CSV, PDF, atau gambar (JPG, PNG). AI akan digunakan untuk PDF/gambar.
-            </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-            <div className="flex items-center gap-4">
-                <Input id="file-upload" type="file" onChange={onFileChange} accept=".csv,application/pdf,image/png,image/jpeg,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" disabled={analysisState === 'analyzing' || analysisState === 'saving'} />
-                <Button onClick={onAnalyze} disabled={!file || analysisState === 'analyzing' || analysisState === 'saving'}>
-                    {(analysisState === 'analyzing' || analysisState === 'saving') && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    {file?.type.includes('spreadsheet') ? <FileSpreadsheet className="mr-2 h-4 w-4" /> : <Wand2 className="mr-2 h-4 w-4" />}
-                    Proses File
-                </Button>
-            </div>
-            {errorMessage && (
-                <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertTitle>Analisis Gagal</AlertTitle>
-                    <AlertDescription>{errorMessage}</AlertDescription>
-                </Alert>
-            )}
-        </CardContent>
-    </Card>
-);
-
-const ReviewAndMapping = ({ salesToCreate, totalQuantity, unrecognizedItems, productMappings, setProductMappings, aggregatedItems, sortedDbProducts }: {
-    salesToCreate: Omit<Sale, 'id'>[];
-    totalQuantity: number;
-    unrecognizedItems: AggregatedSaleItem[];
-    productMappings: Record<string, string>;
-    setProductMappings: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-    aggregatedItems: AggregatedSaleItem[];
-    sortedDbProducts: Product[];
-}) => (
-    <div className="space-y-6">
-        <Alert>
-            <Sparkles className="h-4 w-4" />
-            <AlertTitle>Hasil Analisis</AlertTitle>
-            <AlertDescription>
-                Sistem berhasil mengekstrak <span className="font-bold">{salesToCreate.length} transaksi</span> dengan total <span className="font-bold">{totalQuantity} item</span>.
-                Harap tinjau dan petakan produk yang tidak dikenali di bawah ini.
-            </AlertDescription>
-        </Alert>
-
-        {unrecognizedItems.length > 0 && (
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-lg flex items-center"><AlertCircle className="h-5 w-5 mr-2 text-amber-500" />Petakan Produk Tidak Dikenali</CardTitle>
-                    <CardDescription>Cocokkan SKU dari file impor dengan produk yang ada di database Anda atau buat yang baru.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <ScrollArea className="h-52">
-                        <div className="space-y-4 pr-4">
-                            {unrecognizedItems.map(item => (
-                                <div key={item.sku} className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 items-center">
-                                    <div>
-                                        <p className="font-semibold">{item.name}</p>
-                                        <p className="text-xs text-muted-foreground">SKU Impor: {item.sku}</p>
-                                    </div>
-                                    <Select
-                                        value={productMappings[item.sku] || ''}
-                                        onValueChange={value => setProductMappings(prev => ({ ...prev, [item.sku]: value }))}
-                                    >
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Pilih Aksi..." />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value={CREATE_NEW_PRODUCT_VALUE}>
-                                                <span className="font-semibold text-primary">Buat Produk Baru (ID: {item.sku})</span>
-                                            </SelectItem>
-                                            {sortedDbProducts.map(p => (
-                                                <SelectItem key={p.id} value={p.id}>{p.name} ({p.id})</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                            ))}
-                        </div>
-                    </ScrollArea>
-                </CardContent>
-            </Card>
-        )}
-
-        <Card>
-            <CardHeader>
-                <CardTitle className="text-lg flex items-center"><CheckCircle2 className="h-5 w-5 mr-2 text-green-500" />Ringkasan Impor</CardTitle>
-                <CardDescription>Ini adalah rincian item yang akan dicatat sebagai penjualan setelah konfirmasi.</CardDescription>
-            </CardHeader>
-            <CardContent>
-                <ScrollArea className="h-64 border rounded-md">
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Nama Produk</TableHead>
-                                <TableHead>SKU</TableHead>
-                                <TableHead className="text-right">Jumlah</TableHead>
-                                <TableHead className="text-right">Harga Jual Satuan</TableHead>
-                                <TableHead className="text-right">Status</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {aggregatedItems.map((item, index) => (
-                                <TableRow key={index}>
-                                    <TableCell className="font-medium">{item.name}</TableCell>
-                                    <TableCell className="text-muted-foreground">{item.sku}</TableCell>
-                                    <TableCell className="text-right">{item.quantity}</TableCell>
-                                    <TableCell className="text-right">{formatCurrency(item.price)}</TableCell>
-                                    <TableCell className="text-right">
-                                        <Badge variant={item.isNew ? "secondary" : "default"}>{item.isNew ? "Baru" : "Dikenali"}</Badge>
-                                    </TableCell>
-                                </TableRow>
-                            ))}
-                        </TableBody>
-                    </Table>
-                </ScrollArea>
-            </CardContent>
-        </Card>
-    </div>
-);
-
-const ActionButtons = ({ onReset, onConfirm, analysisState, isMappingComplete }: {
-    onReset: () => void;
-    onConfirm: () => void;
-    analysisState: AnalysisState;
-    isMappingComplete: boolean;
-}) => (
-     <div className="flex justify-end gap-4 mt-6">
-        <Button variant="outline" onClick={onReset} disabled={analysisState === 'saving'}>
-            Mulai Ulang
-        </Button>
-        <Button onClick={onConfirm} disabled={analysisState === 'saving' || !isMappingComplete}>
-            {analysisState === 'saving' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Konfirmasi & Catat Penjualan
-        </Button>
-    </div>
-)
-
-
 const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete, userRole }) => {
     const [file, setFile] = useState<File | null>(null);
     const [analysisState, setAnalysisState] = useState<AnalysisState>('idle');
@@ -492,7 +345,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
 
                     if (validItem) {
                         acc.push(validItem);
-    }
+                    }
                     return acc;
                 }, []);
 
@@ -560,13 +413,31 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
 
     return (
         <div className="space-y-6">
-            <FileUploadCard 
-                onFileChange={handleFileChange}
-                onAnalyze={handleAnalyze}
-                file={file}
-                analysisState={analysisState}
-                errorMessage={errorMessage}
-            />
+            <Card className="max-w-4xl mx-auto">
+                <CardHeader>
+                    <CardTitle>Impor Penjualan dari File</CardTitle>
+                    <CardDescription>
+                        Unggah file Excel (disarankan), CSV, PDF, atau gambar (JPG, PNG). AI akan digunakan untuk PDF/gambar.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="flex items-center gap-4">
+                        <Input id="file-upload" type="file" onChange={handleFileChange} accept=".csv,application/pdf,image/png,image/jpeg,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" disabled={analysisState === 'analyzing' || analysisState === 'saving'} />
+                        <Button onClick={handleAnalyze} disabled={!file || analysisState === 'analyzing' || analysisState === 'saving'}>
+                            {(analysisState === 'analyzing' || analysisState === 'saving') && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            {file?.type.includes('spreadsheet') ? <FileSpreadsheet className="mr-2 h-4 w-4" /> : <Wand2 className="mr-2 h-4 w-4" />}
+                            Proses File
+                        </Button>
+                    </div>
+                    {errorMessage && (
+                        <Alert variant="destructive">
+                            <AlertCircle className="h-4 w-4" />
+                            <AlertTitle>Analisis Gagal</AlertTitle>
+                            <AlertDescription>{errorMessage}</AlertDescription>
+                        </Alert>
+                    )}
+                </CardContent>
+            </Card>
 
             {(analysisState === 'analyzing' || analysisState === 'saving') && (
                 <div className="text-center py-10">
@@ -577,23 +448,99 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
             )}
 
             {analysisState === 'review' && (
-                 <>
-                    <ReviewAndMapping
-                        salesToCreate={salesToCreate}
-                        totalQuantity={totalQuantity}
-                        unrecognizedItems={unrecognizedItems}
-                        productMappings={productMappings}
-                        setProductMappings={setProductMappings}
-                        aggregatedItems={aggregatedItems}
-                        sortedDbProducts={sortedDbProducts}
-                    />
-                    <ActionButtons
-                        onReset={resetState}
-                        onConfirm={handleConfirmImport}
-                        analysisState={analysisState}
-                        isMappingComplete={isMappingComplete}
-                    />
-                </>
+                 <div className="space-y-6">
+                    <Alert>
+                        <Sparkles className="h-4 w-4" />
+                        <AlertTitle>Hasil Analisis</AlertTitle>
+                        <AlertDescription>
+                            Sistem berhasil mengekstrak <span className="font-bold">{salesToCreate.length} transaksi</span> dengan total <span className="font-bold">{totalQuantity} item</span>.
+                            Harap tinjau dan petakan produk yang tidak dikenali di bawah ini.
+                        </AlertDescription>
+                    </Alert>
+            
+                    {unrecognizedItems.length > 0 && (
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-lg flex items-center"><AlertCircle className="h-5 w-5 mr-2 text-amber-500" />Petakan Produk Tidak Dikenali</CardTitle>
+                                <CardDescription>Cocokkan SKU dari file impor dengan produk yang ada di database Anda atau buat yang baru.</CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <ScrollArea className="h-52">
+                                    <div className="space-y-4 pr-4">
+                                        {unrecognizedItems.map(item => (
+                                            <div key={item.sku} className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 items-center">
+                                                <div>
+                                                    <p className="font-semibold">{item.name}</p>
+                                                    <p className="text-xs text-muted-foreground">SKU Impor: {item.sku}</p>
+                                                </div>
+                                                <Select
+                                                    value={productMappings[item.sku] || ''}
+                                                    onValueChange={value => setProductMappings(prev => ({ ...prev, [item.sku]: value }))}
+                                                >
+                                                    <SelectTrigger>
+                                                        <SelectValue placeholder="Pilih Aksi..." />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value={CREATE_NEW_PRODUCT_VALUE}>
+                                                            <span className="font-semibold text-primary">Buat Produk Baru (ID: {item.sku})</span>
+                                                        </SelectItem>
+                                                        {sortedDbProducts.map(p => (
+                                                            <SelectItem key={p.id} value={p.id}>{p.name} ({p.id})</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </ScrollArea>
+                            </CardContent>
+                        </Card>
+                    )}
+            
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-lg flex items-center"><CheckCircle2 className="h-5 w-5 mr-2 text-green-500" />Ringkasan Impor</CardTitle>
+                            <CardDescription>Ini adalah rincian item yang akan dicatat sebagai penjualan setelah konfirmasi.</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <ScrollArea className="h-64 border rounded-md">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Nama Produk</TableHead>
+                                            <TableHead>SKU</TableHead>
+                                            <TableHead className="text-right">Jumlah</TableHead>
+                                            <TableHead className="text-right">Harga Jual Satuan</TableHead>
+                                            <TableHead className="text-right">Status</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {aggregatedItems.map((item, index) => (
+                                            <TableRow key={index}>
+                                                <TableCell className="font-medium">{item.name}</TableCell>
+                                                <TableCell className="text-muted-foreground">{item.sku}</TableCell>
+                                                <TableCell className="text-right">{item.quantity}</TableCell>
+                                                <TableCell className="text-right">{formatCurrency(item.price)}</TableCell>
+                                                <TableCell className="text-right">
+                                                    <Badge variant={item.isNew ? "secondary" : "default"}>{item.isNew ? "Baru" : "Dikenali"}</Badge>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </ScrollArea>
+                        </CardContent>
+                    </Card>
+                    <div className="flex justify-end gap-4 mt-6">
+                        <Button variant="outline" onClick={resetState} disabled={analysisState === 'saving'}>
+                            Mulai Ulang
+                        </Button>
+                        <Button onClick={handleConfirmImport} disabled={analysisState === 'saving' || !isMappingComplete}>
+                            {analysisState === 'saving' && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            Konfirmasi & Catat Penjualan
+                        </Button>
+                    </div>
+                </div>
             )}
         </div>
     );
