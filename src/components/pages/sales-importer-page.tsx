@@ -305,10 +305,10 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
 
             const finalSales: Omit<Sale, 'id'>[] = salesToCreate.map(sale => {
                 const saleItems: SaleItem[] = sale.items.reduce((acc: SaleItem[], item: any) => {
+                    let validItem: SaleItem | null = null;
                     let finalProductId: string | undefined;
                     let importSku = item.sku;
                     const existingProduct = dbProducts.find(p => p.id.toLowerCase() === importSku.toLowerCase());
-                    let validItem: SaleItem | null = null;
             
                     if (existingProduct) {
                         finalProductId = existingProduct.id;
@@ -340,7 +340,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                             };
                         }
                     }
-            
+
                     if (validItem) {
                         acc.push(validItem);
                     }
@@ -421,7 +421,7 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                      <div className="flex items-center gap-4">
                         <Input id="file-upload" type="file" onChange={handleFileChange} accept=".csv,application/pdf,image/png,image/jpeg,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" disabled={analysisState === 'analyzing' || analysisState === 'saving'}/>
                         <Button onClick={handleAnalyze} disabled={!file || analysisState === 'analyzing' || analysisState === 'saving'}>
-                            {analysisState === 'analyzing' && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            {(analysisState === 'analyzing' || analysisState === 'saving') && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                             {file?.type.includes('spreadsheet') ? <FileSpreadsheet className="mr-2 h-4 w-4"/> : <Wand2 className="mr-2 h-4 w-4"/>}
                             Proses File
                         </Button>
@@ -436,11 +436,11 @@ const SalesImporterPage: React.FC<SalesImporterPageProps> = ({ onImportComplete,
                 </CardContent>
             </Card>
 
-            {analysisState === 'analyzing' && (
+            {(analysisState === 'analyzing' || analysisState === 'saving') && (
                 <div className="text-center py-10">
                     <Loader2 className="mx-auto h-12 w-12 text-primary animate-spin" />
-                    <h3 className="mt-4 text-lg font-medium">Memproses File...</h3>
-                    <p className="mt-2 text-sm text-muted-foreground">Harap tunggu, sistem sedang membaca dan mengekstrak data dari file Anda.</p>
+                    <h3 className="mt-4 text-lg font-medium">{analysisState === 'analyzing' ? 'Memproses File...' : 'Menyimpan Data...'}</h3>
+                    <p className="mt-2 text-sm text-muted-foreground">Harap tunggu, sistem sedang bekerja.</p>
                 </div>
             )}
             
