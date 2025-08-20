@@ -24,6 +24,8 @@ import type { Product, Sale, Return, Expense, FlashSale, Settings, SaleItem, Ret
 import { placeholderProducts } from './placeholder-data';
 
 // Generic Firestore interaction functions
+const PAGE_SIZE = 200; // Define the number of transactions per page
+
 async function getCollection<T>(collectionName: string): Promise<T[]> {
   const q = query(collection(db, collectionName));
   const querySnapshot = await getDocs(q);
@@ -164,7 +166,13 @@ export const deleteProduct = async (id: string, user: UserRole) => {
 // Sale-specific functions
 export const getSales = async (): Promise<Sale[]> => {
     const salesData = await getCollection<any>('sales');
-    return salesData.map(sale => ({
+
+    // Sort by date descending
+    salesData.sort((a, b) => b.date.toDate().getTime() - a.date.toDate().getTime());
+
+    // Limit to the first PAGE_SIZE results for initial load
+    // Full pagination logic might require more complex queries using startAfter/startAt
+    return salesData.slice(0, PAGE_SIZE).map(sale => ({
         ...sale,
         date: sale.date,
         items: sale.items.map((item: any) => ({
