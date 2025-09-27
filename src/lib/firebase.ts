@@ -1,8 +1,8 @@
 
 // Import the functions you need from the SDKs you need
-import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
+import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
+import { getFirestore, type Firestore } from "firebase/firestore";
+import { getAuth, type Auth } from "firebase/auth";
 
 // Your web app's Firebase configuration
 // This is moved to the top level to be consistently available.
@@ -16,26 +16,51 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase App
-let app: FirebaseApp;
+let app: FirebaseApp | null = null;
 
-// Check that the config has been provided
-if (firebaseConfig.apiKey) {
-    // Avoid re-initializing the app on hot reloads
-    if (!getApps().length) {
-        app = initializeApp(firebaseConfig);
-    } else {
-        app = getApp();
-    }
-} else {
-    // If the config is not available, we can't initialize the app.
-    // This can happen during the build process on the server.
-    // We'll create a placeholder object to avoid crashing the app.
-    // The actual services will be unavailable until the client-side code runs with env vars.
-    app = {} as FirebaseApp;
+function initializeFirebaseApp(): FirebaseApp | null {
+  if (!firebaseConfig.apiKey) {
+    return null;
+  }
+
+  if (app) {
+    return app;
+  }
+
+  if (!getApps().length) {
+    app = initializeApp(firebaseConfig);
+  } else {
+    app = getApp();
+  }
+
+  return app;
 }
 
+const resolvedApp = initializeFirebaseApp();
 
-const db = getFirestore(app);
-const auth = getAuth(app);
+function createUnavailableServiceProxy<T extends object>(serviceName: string): T {
+  return new Proxy(
+    {},
+    {
+      get() {
+        throw new Error(
+          `Firebase ${serviceName} service is unavailable. Verify that Firebase environment variables are configured.`,
+        );
+      },
+      apply() {
+        throw new Error(
+          `Firebase ${serviceName} service is unavailable. Verify that Firebase environment variables are configured.`,
+        );
+      },
+    },
+  ) as T;
+}
 
-export { app, db, auth };
+const db: Firestore = resolvedApp
+  ? getFirestore(resolvedApp)
+  : createUnavailableServiceProxy<Firestore>('Firestore');
+const auth: Auth = resolvedApp
+  ? getAuth(resolvedApp)
+  : createUnavailableServiceProxy<Auth>('Auth');
+
+export { resolvedApp as app, db, auth };
