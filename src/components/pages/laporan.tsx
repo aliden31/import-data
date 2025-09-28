@@ -11,8 +11,30 @@ import { Calendar as CalendarIcon } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar';
 import { DateRange } from 'react-day-picker';
 import { format, isWithinInterval, startOfDay, eachDayOfInterval, endOfDay } from 'date-fns';
-import type { Sale, Expense, Return, SaleItem, ReturnItem, OtherIncome } from '@/lib/types';
-import { getSales, getExpenses, getReturns, getOtherIncomes } from '@/lib/data-service';
+import type {
+  Sale,
+  Expense,
+  Return,
+  SaleItem,
+  ReturnItem,
+  OtherIncome,
+  TrialBalanceRow,
+  IncomeStatement,
+  BalanceSheet,
+  CashflowStatement,
+  GeneralLedgerAccountLedger,
+} from '@/lib/types';
+import {
+  getSales,
+  getExpenses,
+  getReturns,
+  getOtherIncomes,
+  generateTrialBalance,
+  generateGeneralLedger,
+  generateIncomeStatement,
+  generateBalanceSheet,
+  generateCashflowStatement,
+} from '@/lib/data-service';
 import { useToast } from '@/hooks/use-toast';
 import * as XLSX from 'xlsx';
 import {
@@ -64,6 +86,14 @@ const LaporanPage: FC<LaporanPageProps> = React.memo(({ onNavigate }) => {
     const [returns, setReturns] = useState<Return[]>([]);
     const [otherIncomes, setOtherIncomes] = useState<OtherIncome[]>([]);
     const [loading, setLoading] = useState(true);
+    const [accountingLoading, setAccountingLoading] = useState(false);
+    const [trialBalance, setTrialBalance] = useState<TrialBalanceRow[]>([]);
+    const [incomeStatement, setIncomeStatement] = useState<IncomeStatement | null>(null);
+    const [balanceSheet, setBalanceSheet] = useState<BalanceSheet | null>(null);
+    const [cashflowStatement, setCashflowStatement] = useState<CashflowStatement | null>(null);
+    const [generalLedger, setGeneralLedger] = useState<GeneralLedgerAccountLedger[]>([]);
+    const [ledgerDialogOpen, setLedgerDialogOpen] = useState(false);
+    const [selectedLedgerAccount, setSelectedLedgerAccount] = useState<GeneralLedgerAccountLedger | null>(null);
     const { toast } = useToast();
     const [date, setDate] = React.useState<DateRange | undefined>({
         from: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
@@ -89,7 +119,49 @@ const LaporanPage: FC<LaporanPageProps> = React.memo(({ onNavigate }) => {
         }
         fetchData();
     }, [toast]);
-    
+
+    useEffect(() => {
+        const loadAccountingReports = async () => {
+            if (!date?.from || !date.to) {
+                setTrialBalance([]);
+                setIncomeStatement(null);
+                setBalanceSheet(null);
+                setCashflowStatement(null);
+                setGeneralLedger([]);
+                setAccountingLoading(false);
+                return;
+            }
+
+            setAccountingLoading(true);
+            try {
+                const period = {
+                    startDate: startOfDay(date.from),
+                    endDate: endOfDay(date.to),
+                };
+                const [trial, ledger, income, balance, cashflow] = await Promise.all([
+                    generateTrialBalance(period),
+                    generateGeneralLedger(period),
+                    generateIncomeStatement(period),
+                    generateBalanceSheet(period),
+                    generateCashflowStatement(period),
+                ]);
+
+                setTrialBalance(trial);
+                setGeneralLedger(ledger);
+                setIncomeStatement(income);
+                setBalanceSheet(balance);
+                setCashflowStatement(cashflow);
+            } catch (error) {
+                console.error(error);
+                toast({ title: 'Error', description: 'Gagal menghasilkan laporan akuntansi.', variant: 'destructive' });
+            } finally {
+                setAccountingLoading(false);
+            }
+        };
+
+        loadAccountingReports();
+    }, [date, toast]);
+
     const filteredData = useMemo(() => {
         if (!date?.from || !date.to) return { filteredSales: [], filteredExpenses: [], filteredReturns: [], filteredOtherIncomes: [] };
 
@@ -367,6 +439,34 @@ const LaporanPage: FC<LaporanPageProps> = React.memo(({ onNavigate }) => {
     };
     
 
+    const selectedPeriodLabel = useMemo(() => {
+        if (date?.from && date.to) {
+            return `${format(date.from, 'dd MMM yyyy')} - ${format(date.to, 'dd MMM yyyy')}`;
+        }
+        return 'Semua waktu';
+    }, [date]);
+
+    const renderStatementSection = (section: IncomeStatement['pendapatan']) => (
+        <div className="space-y-2" key={section.title}>
+            <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold">{section.title}</h4>
+                <span className="text-sm font-semibold">{formatCurrency(section.total)}</span>
+            </div>
+            <div className="space-y-1">
+                {section.rows.length > 0 ? (
+                    section.rows.map((row) => (
+                        <div key={row.accountId} className="flex items-center justify-between text-sm text-muted-foreground">
+                            <span>{row.accountCode} - {row.accountName}</span>
+                            <span>{formatCurrency(row.amount)}</span>
+                        </div>
+                    ))
+                ) : (
+                    <p className="text-xs text-muted-foreground">Tidak ada transaksi untuk bagian ini.</p>
+                )}
+            </div>
+        </div>
+    );
+
     const kpiCards = [
         { title: 'Penjualan Bersih', value: formatCurrency(financialSummary.totalSales), icon: TrendingUp, color: 'text-green-500', view: 'penjualan' as View | undefined },
         { title: 'Total Diskon', value: formatCurrency(financialSummary.totalDiscount), icon: Tag, color: 'text-pink-500', view: undefined },
@@ -535,6 +635,257 @@ const LaporanPage: FC<LaporanPageProps> = React.memo(({ onNavigate }) => {
             )}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+            <CardTitle>Neraca Saldo (COA)</CardTitle>
+            <CardDescription>Saldo per akun berdasarkan jurnal otomatis untuk periode {selectedPeriodLabel}.</CardDescription>
+        </CardHeader>
+        <CardContent>
+            {accountingLoading ? (
+                <p className="text-sm text-muted-foreground">Menghitung neraca saldo...</p>
+            ) : trialBalance.length > 0 ? (
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead>
+                            <tr className="text-left">
+                                <th className="py-2 pr-4">Kode Akun</th>
+                                <th className="py-2 pr-4">Nama Akun</th>
+                                <th className="py-2 pr-4 text-right">Saldo Awal</th>
+                                <th className="py-2 pr-4 text-right">Debit</th>
+                                <th className="py-2 pr-4 text-right">Kredit</th>
+                                <th className="py-2 text-right">Saldo Akhir</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {trialBalance.map((row) => (
+                                <tr key={row.accountId} className="border-t border-border/50">
+                                    <td className="py-2 pr-4 whitespace-nowrap font-medium">{row.accountCode}</td>
+                                    <td className="py-2 pr-4">{row.accountName}</td>
+                                    <td className="py-2 pr-4 text-right">{formatCurrency(row.openingBalance)}</td>
+                                    <td className="py-2 pr-4 text-right">{formatCurrency(row.debit)}</td>
+                                    <td className="py-2 pr-4 text-right">{formatCurrency(row.credit)}</td>
+                                    <td className="py-2 text-right font-semibold">{formatCurrency(row.closingBalance)}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            ) : (
+                <p className="text-sm text-muted-foreground">Belum ada jurnal yang tercatat pada periode ini.</p>
+            )}
+        </CardContent>
+      </Card>
+
+      {incomeStatement && (
+        <Card>
+            <CardHeader>
+                <CardTitle>Laporan Laba Rugi</CardTitle>
+                <CardDescription>Ringkasan kinerja laba rugi periode {selectedPeriodLabel}.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                {renderStatementSection(incomeStatement.pendapatan)}
+                {renderStatementSection(incomeStatement.hpp)}
+                {renderStatementSection(incomeStatement.beban)}
+                <Separator />
+                <div className="flex items-center justify-between text-sm font-semibold">
+                    <span>Laba Kotor</span>
+                    <span>{formatCurrency(incomeStatement.labaKotor)}</span>
+                </div>
+                <div className="flex items-center justify-between text-base font-bold">
+                    <span>Laba Bersih</span>
+                    <span className={incomeStatement.labaBersih >= 0 ? 'text-green-600' : 'text-destructive'}>{formatCurrency(incomeStatement.labaBersih)}</span>
+                </div>
+            </CardContent>
+        </Card>
+      )}
+
+      {balanceSheet && (
+        <Card>
+            <CardHeader>
+                <CardTitle>Neraca</CardTitle>
+                <CardDescription>Posisi keuangan dasar periode {selectedPeriodLabel}.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-6 md:grid-cols-2">
+                <div className="space-y-2">
+                    <h4 className="text-sm font-semibold">Aset</h4>
+                    <div className="space-y-1">
+                        {balanceSheet.aset.rows.map((row) => (
+                            <div key={row.accountId} className="flex justify-between text-sm text-muted-foreground">
+                                <span>{row.accountCode} - {row.accountName}</span>
+                                <span>{formatCurrency(row.amount)}</span>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="flex justify-between text-sm font-semibold">
+                        <span>Total Aset</span>
+                        <span>{formatCurrency(balanceSheet.totalAset)}</span>
+                    </div>
+                </div>
+                <div className="space-y-4">
+                    <div className="space-y-2">
+                        <h4 className="text-sm font-semibold">Kewajiban</h4>
+                        <div className="space-y-1">
+                            {balanceSheet.kewajiban.rows.map((row) => (
+                                <div key={row.accountId} className="flex justify-between text-sm text-muted-foreground">
+                                    <span>{row.accountCode} - {row.accountName}</span>
+                                    <span>{formatCurrency(row.amount)}</span>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex justify-between text-sm font-semibold">
+                            <span>Total Kewajiban</span>
+                            <span>{formatCurrency(balanceSheet.kewajiban.total)}</span>
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        <h4 className="text-sm font-semibold">Ekuitas</h4>
+                        <div className="space-y-1">
+                            {balanceSheet.ekuitas.rows.map((row) => (
+                                <div key={row.accountId} className="flex justify-between text-sm text-muted-foreground">
+                                    <span>{row.accountCode} - {row.accountName}</span>
+                                    <span>{formatCurrency(row.amount)}</span>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex justify-between text-sm font-semibold">
+                            <span>Total Ekuitas</span>
+                            <span>{formatCurrency(balanceSheet.ekuitas.total)}</span>
+                        </div>
+                    </div>
+                    <Separator />
+                    <div className="flex justify-between text-sm font-semibold">
+                        <span>Total Kewajiban + Ekuitas</span>
+                        <span>{formatCurrency(balanceSheet.totalKewajibanDanEkuitas)}</span>
+                    </div>
+                </div>
+            </CardContent>
+        </Card>
+      )}
+
+      {cashflowStatement && (
+        <Card>
+            <CardHeader>
+                <CardTitle>Laporan Arus Kas (Direct)</CardTitle>
+                <CardDescription>Pergerakan kas dan setara kas periode {selectedPeriodLabel}.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                    <span>Penerimaan Kas</span>
+                    <span>{formatCurrency(cashflowStatement.cashIn)}</span>
+                </div>
+                <div className="flex justify-between">
+                    <span>Pengeluaran Kas</span>
+                    <span>{formatCurrency(cashflowStatement.cashOut)}</span>
+                </div>
+                <Separator />
+                <div className="flex justify-between font-semibold">
+                    <span>Arus Kas Bersih</span>
+                    <span className={cashflowStatement.netCashFlow >= 0 ? 'text-green-600' : 'text-destructive'}>{formatCurrency(cashflowStatement.netCashFlow)}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                    <span>Saldo Awal Kas</span>
+                    <span>{formatCurrency(cashflowStatement.openingBalance)}</span>
+                </div>
+                <div className="flex justify-between text-sm font-semibold">
+                    <span>Saldo Akhir Kas</span>
+                    <span>{formatCurrency(cashflowStatement.closingBalance)}</span>
+                </div>
+            </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+            <CardTitle>Buku Besar</CardTitle>
+            <CardDescription>Pilih akun untuk meninjau jurnal dan saldo berjalan.</CardDescription>
+        </CardHeader>
+        <CardContent>
+            {accountingLoading ? (
+                <p className="text-sm text-muted-foreground">Memuat buku besar...</p>
+            ) : generalLedger.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                    {generalLedger.map((ledger) => (
+                        <Button
+                            key={ledger.accountId}
+                            variant="outline"
+                            onClick={() => {
+                                setSelectedLedgerAccount(ledger);
+                                setLedgerDialogOpen(true);
+                            }}
+                        >
+                            {ledger.accountCode} - {ledger.accountName}
+                        </Button>
+                    ))}
+                </div>
+            ) : (
+                <p className="text-sm text-muted-foreground">Belum ada transaksi buku besar pada periode ini.</p>
+            )}
+        </CardContent>
+      </Card>
+
+      <Dialog
+        open={ledgerDialogOpen}
+        onOpenChange={(open) => {
+            setLedgerDialogOpen(open);
+            if (!open) {
+                setSelectedLedgerAccount(null);
+            }
+        }}
+      >
+        <DialogContent className="max-w-4xl">
+            <DialogHeader>
+                <DialogTitle>{selectedLedgerAccount ? `${selectedLedgerAccount.accountCode} - ${selectedLedgerAccount.accountName}` : 'Buku Besar'}</DialogTitle>
+                <DialogDescription>
+                    {selectedLedgerAccount ? `Periode ${selectedPeriodLabel}` : 'Pilih akun untuk melihat detail buku besar.'}
+                </DialogDescription>
+            </DialogHeader>
+            {selectedLedgerAccount ? (
+                <div className="space-y-4">
+                    <div className="flex justify-between text-sm">
+                        <span>Saldo Awal</span>
+                        <span>{formatCurrency(selectedLedgerAccount.openingBalance)}</span>
+                    </div>
+                    <div className="overflow-x-auto max-h-[60vh]">
+                        <table className="min-w-full text-sm">
+                            <thead>
+                                <tr className="text-left">
+                                    <th className="py-2 pr-4">Tanggal</th>
+                                    <th className="py-2 pr-4">Referensi</th>
+                                    <th className="py-2 pr-4">Deskripsi</th>
+                                    <th className="py-2 pr-4 text-right">Debit</th>
+                                    <th className="py-2 pr-4 text-right">Kredit</th>
+                                    <th className="py-2 text-right">Saldo</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {selectedLedgerAccount.lines.length > 0 ? selectedLedgerAccount.lines.map((line, index) => (
+                                    <tr key={`${line.reference}-${index}`} className="border-t border-border/50">
+                                        <td className="py-2 pr-4 whitespace-nowrap">{format(new Date(line.date), 'dd/MM/yyyy')}</td>
+                                        <td className="py-2 pr-4">{line.reference}</td>
+                                        <td className="py-2 pr-4">{line.description}</td>
+                                        <td className="py-2 pr-4 text-right">{formatCurrency(line.debit)}</td>
+                                        <td className="py-2 pr-4 text-right">{formatCurrency(line.credit)}</td>
+                                        <td className="py-2 text-right font-medium">{formatCurrency(line.balance)}</td>
+                                    </tr>
+                                )) : (
+                                    <tr>
+                                        <td colSpan={6} className="py-4 text-center text-muted-foreground">Tidak ada jurnal pada periode ini.</td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div className="flex justify-between text-sm font-semibold">
+                        <span>Saldo Akhir</span>
+                        <span>{formatCurrency(selectedLedgerAccount.closingBalance)}</span>
+                    </div>
+                </div>
+            ) : (
+                <p className="text-sm text-muted-foreground">Pilih akun dari daftar buku besar untuk melihat detail.</p>
+            )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 });

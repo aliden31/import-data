@@ -20,43 +20,453 @@ import {
   onSnapshot,
   where,
 } from 'firebase/firestore';
-import type { Product, Sale, Return, Expense, FlashSale, Settings, SaleItem, ReturnItem, Category, SubCategory, StockOpnameLog, UserRole, ActivityLog, PublicSettings, OtherIncome, ImportedFile, SkuMapping } from './types';
+import type {
+  Product,
+  Sale,
+  Return,
+  Expense,
+  FlashSale,
+  Settings,
+  SaleItem,
+  ReturnItem,
+  Category,
+  SubCategory,
+  StockOpnameLog,
+  UserRole,
+  ActivityLog,
+  PublicSettings,
+  OtherIncome,
+  ImportedFile,
+  SkuMapping,
+  Warehouse,
+  StockTransfer,
+  PaymentSplit,
+  JournalEntry,
+  JournalLine,
+  Account,
+  CashflowSnapshot,
+  PaymentMethod,
+  TrialBalanceRow,
+  GeneralLedgerAccountLedger,
+  GeneralLedgerLine,
+  IncomeStatement,
+  BalanceSheet,
+  CashflowStatement,
+  FinancialPeriod,
+  NormalBalance,
+  FinancialStatementRow,
+  FinancialStatementSection,
+} from './types';
 import { placeholderProducts } from './placeholder-data';
 
 // Generic Firestore interaction functions
 const PAGE_SIZE = 200; // Define the number of transactions per page
 
+function cleanUndefined<T extends Record<string, unknown>>(value: T): T {
+  const result: Record<string, unknown> = {};
+  Object.entries(value).forEach(([key, val]) => {
+    if (val !== undefined) {
+      result[key] = val;
+    }
+  });
+  return result as T;
+}
+
+function convertTimestampsToDates<T>(value: T): T {
+  if (value instanceof Timestamp) {
+    return value.toDate() as unknown as T;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => convertTimestampsToDates(item)) as unknown as T;
+  }
+
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    Object.entries(value as Record<string, unknown>).forEach(([key, val]) => {
+      result[key] = convertTimestampsToDates(val);
+    });
+    return result as T;
+  }
+
+  return value;
+}
+
+const DEFAULT_CHART_OF_ACCOUNTS: Account[] = [
+  { id: '1000', code: '1000', name: 'Aset Lancar', type: 'asset' },
+  { id: '1100', code: '1100', name: 'Kas & Setara Kas', type: 'asset', parentCode: '1000' },
+  { id: '1101', code: '1101', name: 'Kas', type: 'asset', parentCode: '1100' },
+  { id: '1102', code: '1102', name: 'Bank', type: 'asset', parentCode: '1100' },
+  { id: '1103', code: '1103', name: 'Kas E-Wallet', type: 'asset', parentCode: '1100' },
+  { id: '1130', code: '1130', name: 'Piutang Usaha', type: 'asset', parentCode: '1000' },
+  { id: '1200', code: '1200', name: 'Persediaan', type: 'asset', parentCode: '1000' },
+  { id: '1400', code: '1400', name: 'Persediaan Barang Dagang', type: 'asset', parentCode: '1200' },
+  { id: '1500', code: '1500', name: 'Aset Tetap', type: 'asset', parentCode: '1000' },
+  { id: '2000', code: '2000', name: 'Kewajiban Lancar', type: 'liability' },
+  { id: '2100', code: '2100', name: 'Hutang Usaha', type: 'liability', parentCode: '2000' },
+  { id: '2300', code: '2300', name: 'Hutang Lain-Lain', type: 'liability', parentCode: '2000' },
+  { id: '3000', code: '3000', name: 'Ekuitas', type: 'equity' },
+  { id: '3100', code: '3100', name: 'Modal Disetor', type: 'equity', parentCode: '3000' },
+  { id: '3200', code: '3200', name: 'Laba Ditahan', type: 'equity', parentCode: '3000' },
+  { id: '3300', code: '3300', name: 'Laba Tahun Berjalan', type: 'equity', parentCode: '3000' },
+  { id: '4000', code: '4000', name: 'Pendapatan', type: 'revenue' },
+  { id: '4100', code: '4100', name: 'Pendapatan Penjualan', type: 'revenue', parentCode: '4000' },
+  { id: '4200', code: '4200', name: 'Pendapatan Lain-Lain', type: 'revenue', parentCode: '4000' },
+  { id: '4300', code: '4300', name: 'Pendapatan Bunga', type: 'revenue', parentCode: '4000' },
+  { id: '5000', code: '5000', name: 'Harga Pokok Penjualan', type: 'expense' },
+  { id: '5100', code: '5100', name: 'Harga Pokok Penjualan', type: 'expense', parentCode: '5000' },
+  { id: '5200', code: '5200', name: 'Retur Penjualan', type: 'expense', parentCode: '5000' },
+  { id: '6000', code: '6000', name: 'Beban Operasional', type: 'expense' },
+  { id: '6100', code: '6100', name: 'Beban Operasional', type: 'expense', parentCode: '6000' },
+  { id: '6200', code: '6200', name: 'Beban Administrasi & Umum', type: 'expense', parentCode: '6000' },
+  { id: '6300', code: '6300', name: 'Beban Penjualan', type: 'expense', parentCode: '6000' },
+];
+
+const getDefaultAccount = (accountId: string): Account => {
+  const account = DEFAULT_CHART_OF_ACCOUNTS.find((item) => item.id === accountId);
+  if (!account) {
+    throw new Error(`Default account ${accountId} tidak ditemukan`);
+  }
+  return account;
+};
+
+const ACCOUNT_REFERENCES: Record<string, Account> = {
+  cash: getDefaultAccount('1101'),
+  bank: getDefaultAccount('1102'),
+  ewallet: getDefaultAccount('1103'),
+  ar: getDefaultAccount('1130'),
+  inventory: getDefaultAccount('1400'),
+  cogs: getDefaultAccount('5100'),
+  salesRevenue: getDefaultAccount('4100'),
+  salesReturn: getDefaultAccount('5200'),
+  expense: getDefaultAccount('6100'),
+  otherIncome: getDefaultAccount('4200'),
+};
+
+const ACCOUNT_METADATA: Record<string, Account> = [...DEFAULT_CHART_OF_ACCOUNTS, ...Object.values(ACCOUNT_REFERENCES)].reduce(
+  (acc, account) => {
+    acc[account.id] = account;
+    return acc;
+  },
+  {} as Record<string, Account>,
+);
+
+const NORMAL_BALANCE_BY_TYPE: Record<Account['type'], NormalBalance> = {
+  asset: 'debit',
+  expense: 'debit',
+  other: 'debit',
+  liability: 'credit',
+  equity: 'credit',
+  revenue: 'credit',
+};
+
+const CASH_ACCOUNT_IDS = new Set<string>(['1101', '1102', '1103']);
+
+const PAYMENT_ACCOUNT_MAP: Record<PaymentMethod, Account> = {
+  cash: ACCOUNT_REFERENCES.cash,
+  transfer: ACCOUNT_REFERENCES.bank,
+  ewallet: ACCOUNT_REFERENCES.ewallet,
+  credit: ACCOUNT_REFERENCES.ar,
+};
+
+const accountCache = new Map<string, Account>();
+
+async function ensureAccountReference(account: Account) {
+  if (accountCache.has(account.id)) {
+    return accountCache.get(account.id)!;
+  }
+  try {
+    const accountRef = doc(db, 'accounts', account.id);
+    const snapshot = await getDoc(accountRef);
+    if (!snapshot.exists()) {
+      await setDoc(accountRef, account);
+    }
+    accountCache.set(account.id, account);
+  } catch (error) {
+    console.warn('Failed to ensure account reference', error);
+  }
+  return account;
+}
+
+async function ensureDefaultChartOfAccounts(): Promise<void> {
+  await Promise.all(DEFAULT_CHART_OF_ACCOUNTS.map((account) => ensureAccountReference(account)));
+}
+
+const getPeriodKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+};
+
+async function updateCashflowSnapshot(date: Date, cashInDelta: number, cashOutDelta: number) {
+  const period = getPeriodKey(date);
+  const snapshotRef = doc(db, 'cashflowSnapshots', `direct-${period}`);
+  await runTransaction(db, async (transaction) => {
+    const snapshotDoc = await transaction.get(snapshotRef);
+    const existing = snapshotDoc.exists()
+      ? convertTimestampsToDates(snapshotDoc.data() as CashflowSnapshot)
+      : { cashIn: 0, cashOut: 0, method: 'direct', generatedAt: date, period };
+
+    const method: CashflowSnapshot['method'] = existing.method === 'indirect' ? 'indirect' : 'direct';
+
+    const updated = {
+      cashIn: (existing.cashIn || 0) + cashInDelta,
+      cashOut: (existing.cashOut || 0) + cashOutDelta,
+      method,
+      generatedAt: date,
+      period,
+    } satisfies Omit<CashflowSnapshot, 'id'>;
+
+    transaction.set(snapshotRef, convertDatesToTimestamps(updated));
+  });
+}
+
+async function addJournalEntryInternal(entry: Omit<JournalEntry, 'id'>): Promise<JournalEntry> {
+  const preparedLines = entry.lines.filter((line) => line.debit !== 0 || line.credit !== 0);
+  for (const line of preparedLines) {
+    const metadata = ACCOUNT_METADATA[line.accountId];
+    await ensureAccountReference({
+      id: line.accountId,
+      code: line.accountId,
+      name: line.accountName,
+      type: metadata?.type || 'other',
+    });
+  }
+  return addDocument<JournalEntry>('journalEntries', { ...entry, lines: preparedLines });
+}
+
+async function deleteJournalEntriesByReference(reference: string): Promise<void> {
+  const q = query(collection(db, 'journalEntries'), where('reference', '==', reference));
+  const snapshot = await getDocs(q);
+  if (snapshot.empty) {
+    return;
+  }
+  const batch = writeBatch(db);
+  snapshot.forEach((docSnap) => batch.delete(docSnap.ref));
+  await batch.commit();
+}
+
+function deriveSalePayments(sale: Sale): PaymentSplit[] {
+  if (sale.payments && sale.payments.length > 0) {
+    return sale.payments;
+  }
+  if (sale.paymentMethod) {
+    return [{ method: sale.paymentMethod, amount: sale.finalTotal }];
+  }
+  return [{ method: 'cash', amount: sale.finalTotal }];
+}
+
+function sumNonCreditPayments(payments: PaymentSplit[]): number {
+  return payments.reduce((sum, payment) => (payment.method === 'credit' ? sum : sum + payment.amount), 0);
+}
+
+async function reverseSaleCashSnapshot(sale: Sale): Promise<void> {
+  const payments = deriveSalePayments(sale);
+  const totalPaymentAmount = sumNonCreditPayments(payments);
+  if (totalPaymentAmount === 0) {
+    return;
+  }
+  await updateCashflowSnapshot(sale.date, -totalPaymentAmount, 0);
+}
+
+async function recordSaleJournalEntry(sale: Sale, user: UserRole | 'sistem', source: JournalEntry['sourceModule']) {
+  const payments = deriveSalePayments(sale);
+  const journalLines: JournalLine[] = [];
+  let totalPaymentAmount = 0;
+
+  for (const payment of payments) {
+    if (payment.amount <= 0) continue;
+    const method = (payment.method in PAYMENT_ACCOUNT_MAP
+      ? payment.method
+      : 'cash') as PaymentMethod;
+    const account = PAYMENT_ACCOUNT_MAP[method];
+    journalLines.push({
+      accountId: account.id,
+      accountName: account.name,
+      debit: payment.amount,
+      credit: 0,
+    });
+    if (method !== 'credit') {
+      totalPaymentAmount += payment.amount;
+    }
+  }
+
+  const paidTotal = payments.reduce((sum, split) => sum + split.amount, 0);
+  if (paidTotal < sale.finalTotal) {
+    const outstanding = sale.finalTotal - paidTotal;
+    if (outstanding > 0) {
+      const account = ACCOUNT_REFERENCES.ar;
+      journalLines.push({ accountId: account.id, accountName: account.name, debit: outstanding, credit: 0 });
+    }
+  }
+
+  const revenueAccount = ACCOUNT_REFERENCES.salesRevenue;
+  journalLines.push({
+    accountId: revenueAccount.id,
+    accountName: revenueAccount.name,
+    debit: 0,
+    credit: sale.finalTotal,
+  });
+
+  const costOfGoods = sale.items.reduce((sum, item) => {
+    const cost = item.costPriceAtSale ?? item.product.costPrice ?? 0;
+    return sum + cost * item.quantity;
+  }, 0);
+
+  if (costOfGoods > 0) {
+    const cogsAccount = ACCOUNT_REFERENCES.cogs;
+    const inventoryAccount = ACCOUNT_REFERENCES.inventory;
+    journalLines.push({ accountId: cogsAccount.id, accountName: cogsAccount.name, debit: costOfGoods, credit: 0 });
+    journalLines.push({ accountId: inventoryAccount.id, accountName: inventoryAccount.name, debit: 0, credit: costOfGoods });
+  }
+
+  await addJournalEntryInternal({
+    date: sale.date,
+    reference: sale.orderNo || sale.id,
+    description: `Penjualan otomatis (${source === 'pos' ? 'POS' : 'Impor'}) oleh ${user}`,
+    lines: journalLines,
+    sourceModule: source,
+  });
+
+  await updateCashflowSnapshot(sale.date, totalPaymentAmount, 0);
+}
+
+async function recordReturnJournalEntry(returnData: Return, user: UserRole | 'sistem') {
+  const journalLines: JournalLine[] = [];
+  const refundAmount = returnData.totalRefund || 0;
+  if (refundAmount > 0) {
+    journalLines.push({
+      accountId: ACCOUNT_REFERENCES.salesReturn.id,
+      accountName: ACCOUNT_REFERENCES.salesReturn.name,
+      debit: refundAmount,
+      credit: 0,
+    });
+    journalLines.push({
+      accountId: ACCOUNT_REFERENCES.cash.id,
+      accountName: ACCOUNT_REFERENCES.cash.name,
+      debit: 0,
+      credit: refundAmount,
+    });
+  }
+
+  const costReturned = returnData.items.reduce((sum, item) => sum + (item.costPriceAtSale || 0) * item.quantity, 0);
+  if (costReturned > 0) {
+    journalLines.push({
+      accountId: ACCOUNT_REFERENCES.inventory.id,
+      accountName: ACCOUNT_REFERENCES.inventory.name,
+      debit: costReturned,
+      credit: 0,
+    });
+    journalLines.push({
+      accountId: ACCOUNT_REFERENCES.cogs.id,
+      accountName: ACCOUNT_REFERENCES.cogs.name,
+      debit: 0,
+      credit: costReturned,
+    });
+  }
+
+  await addJournalEntryInternal({
+    date: returnData.date,
+    reference: returnData.saleId,
+    description: `Retur penjualan oleh ${user}`,
+    lines: journalLines,
+    sourceModule: 'return',
+  });
+
+  if (refundAmount > 0) {
+    await updateCashflowSnapshot(returnData.date, 0, refundAmount);
+  }
+}
+
+async function recordExpenseJournalEntry(expense: Expense, user: UserRole | 'sistem') {
+  const journalLines: JournalLine[] = [
+    {
+      accountId: ACCOUNT_REFERENCES.expense.id,
+      accountName: ACCOUNT_REFERENCES.expense.name,
+      debit: expense.amount,
+      credit: 0,
+    },
+    {
+      accountId: ACCOUNT_REFERENCES.cash.id,
+      accountName: ACCOUNT_REFERENCES.cash.name,
+      debit: 0,
+      credit: expense.amount,
+    },
+  ];
+
+  await addJournalEntryInternal({
+    date: expense.date,
+    reference: expense.id || expense.name,
+    description: `Pengeluaran kas (${expense.category}) oleh ${user}`,
+    lines: journalLines,
+    sourceModule: 'expense',
+  });
+
+  await updateCashflowSnapshot(expense.date, 0, expense.amount);
+}
+
+async function recordOtherIncomeJournalEntry(income: OtherIncome, user: UserRole | 'sistem') {
+  const journalLines: JournalLine[] = [
+    {
+      accountId: ACCOUNT_REFERENCES.cash.id,
+      accountName: ACCOUNT_REFERENCES.cash.name,
+      debit: income.amount,
+      credit: 0,
+    },
+    {
+      accountId: ACCOUNT_REFERENCES.otherIncome.id,
+      accountName: ACCOUNT_REFERENCES.otherIncome.name,
+      debit: 0,
+      credit: income.amount,
+    },
+  ];
+
+  await addJournalEntryInternal({
+    date: income.date,
+    reference: income.id || income.name,
+    description: `Pemasukan lain oleh ${user}`,
+    lines: journalLines,
+    sourceModule: 'other',
+  });
+
+  await updateCashflowSnapshot(income.date, income.amount, 0);
+}
+
+function convertDatesToTimestamps<T>(value: T): T {
+  if (value instanceof Date) {
+    return Timestamp.fromDate(value) as unknown as T;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => convertDatesToTimestamps(item)) as unknown as T;
+  }
+
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    Object.entries(value as Record<string, unknown>).forEach(([key, val]) => {
+      result[key] = convertDatesToTimestamps(val);
+    });
+    return result as T;
+  }
+
+  return value;
+}
+
 async function getCollection<T>(collectionName: string): Promise<T[]> {
   const q = query(collection(db, collectionName));
   const querySnapshot = await getDocs(q);
-  const results: T[] = [];
-    querySnapshot.docs.forEach(doc => {
-        const data = doc.data();
-        // Convert Firestore Timestamps to JS Dates
-        for (const key in data) {
-          if (Object.prototype.hasOwnProperty.call(data, key)) {
-            const value = data[key];
-            if (value instanceof Timestamp) {
-              data[key] = value.toDate();
-            }
-          }
-        }
-        results.push({ id: doc.id, ...data } as T);
-    });
-    return results;
+  const results: T[] = querySnapshot.docs.map((docSnap) => {
+    const data = convertTimestampsToDates(docSnap.data());
+    return { id: docSnap.id, ...data } as T;
+  });
+  return results;
 }
 
 async function getDocumentById<T>(collectionName: string, id: string): Promise<T | undefined> {
     const docRef = doc(db, collectionName, id);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-        const data = docSnap.data();
-        // Convert Firestore Timestamps to JS Dates
-        Object.keys(data).forEach(key => {
-            if (data[key] instanceof Timestamp) {
-                data[key] = data[key].toDate();
-            }
-        });
+        const data = convertTimestampsToDates(docSnap.data());
         return { id: docSnap.id, ...data } as T;
     }
     return undefined;
@@ -64,12 +474,7 @@ async function getDocumentById<T>(collectionName: string, id: string): Promise<T
 
 
 async function addDocument<T>(collectionName: string, data: Omit<T, 'id'>, id?: string): Promise<T> {
-    const dataWithTimestamp: { [key: string]: any } = { ...data };
-    Object.keys(dataWithTimestamp).forEach(key => {
-        if (dataWithTimestamp[key] instanceof Date) {
-            dataWithTimestamp[key] = Timestamp.fromDate(dataWithTimestamp[key]);
-        }
-    });
+    const dataWithTimestamp = convertDatesToTimestamps(data);
 
   let docRef;
   if (id) {
@@ -167,19 +572,28 @@ export const deleteProduct = async (id: string, user: UserRole) => {
 export const getSales = async (): Promise<Sale[]> => {
     const salesData = await getCollection<any>('sales');
 
-    // Sort by date descending
-    salesData.sort((a, b) => b.date.toDate().getTime() - a.date.toDate().getTime());
+    const normalized = salesData.map((rawSale) => {
+        const saleDate = rawSale.date instanceof Date ? rawSale.date : new Date(rawSale.date);
+        const payments: PaymentSplit[] | undefined = rawSale.payments?.map((payment: PaymentSplit) => ({
+            ...payment,
+            dueDate: payment.dueDate ? new Date(payment.dueDate) : undefined,
+        }));
 
-    // Limit to the first PAGE_SIZE results for initial load
-    // Full pagination logic might require more complex queries using startAfter/startAt
-    return salesData.slice(0, PAGE_SIZE).map(sale => ({
-        ...sale,
-        date: sale.date,
-        items: sale.items.map((item: any) => ({
-             ...item,
-             product: item.product || { id: 'unknown', name: 'Produk Dihapus', costPrice: 0, sellingPrice: 0, stock: 0, category: 'Lainnya' }
-        }))
-    }));
+        return {
+            ...rawSale,
+            date: saleDate,
+            payments,
+            paymentStatus: rawSale.paymentStatus || rawSale.paidStatus,
+            items: rawSale.items.map((item: any) => ({
+                ...item,
+                product: item.product || { id: 'unknown', name: 'Produk Dihapus', costPrice: 0, sellingPrice: 0, stock: 0, category: 'Lainnya' }
+            })),
+        } as Sale;
+    });
+
+    normalized.sort((a, b) => b.date.getTime() - a.date.getTime());
+
+    return normalized.slice(0, PAGE_SIZE);
 }
 
 export const getSaleById = (id: string) => getDocumentById<Sale>('sales', id);
@@ -191,15 +605,13 @@ export const addSale = async (sale: Omit<Sale, 'id'>, user: UserRole): Promise<S
 
 export const batchAddSales = async (sales: Omit<Sale, 'id'>[], user: UserRole): Promise<Sale[]> => {
     const stockChanges: Record<string, number> = {};
-    
-    // Aggregate all stock changes from all sales
+
     for (const sale of sales) {
         for (const item of sale.items) {
             stockChanges[item.product.id] = (stockChanges[item.product.id] || 0) + item.quantity;
         }
     }
 
-    // Run a single transaction for all operations
     const newSales = await runTransaction(db, async (transaction) => {
         const productRefs = Object.keys(stockChanges).map(productId => doc(db, 'products', productId));
         const productDocs = await Promise.all(productRefs.map(ref => transaction.get(ref)));
@@ -207,14 +619,13 @@ export const batchAddSales = async (sales: Omit<Sale, 'id'>[], user: UserRole): 
 
         for (const docSnap of productDocs) {
             if (docSnap.exists()) {
-                productsData[docSnap.id] = { id: docSnap.id, ...docSnap.data() } as Product;
+                productsData[docSnap.id] = { id: docSnap.id, ...convertTimestampsToDates(docSnap.data()) } as Product;
             }
         }
 
-        // Update stock for all affected products
         for (const productId in stockChanges) {
             if (productsData[productId]) {
-                const productRef = doc(db, "products", productId);
+                const productRef = doc(db, 'products', productId);
                 const productData = productsData[productId];
                 const newStock = productData.stock - stockChanges[productId];
                 transaction.update(productRef, { stock: newStock });
@@ -224,35 +635,62 @@ export const batchAddSales = async (sales: Omit<Sale, 'id'>[], user: UserRole): 
         }
 
         const createdSales: Sale[] = [];
-        // Create new sale documents
+
         for (const sale of sales) {
-            const saleRef = doc(collection(db, "sales"));
-            const saleDataForFirestore = {
-                items: sale.items.map(item => ({
-                    product: {
-                        id: item.product.id,
-                        name: item.product.name,
-                        category: item.product.category,
-                        subcategory: item.product.subcategory || '',
-                        costPrice: item.product.costPrice,
-                    },
-                    quantity: item.quantity,
-                    price: item.price,
-                    costPriceAtSale: productsData[item.product.id]?.costPrice ?? item.costPriceAtSale,
-                })),
+            const saleRef = doc(collection(db, 'sales'));
+            const totalPayments = sale.payments?.reduce((sum, payment) => sum + payment.amount, 0) ?? 0;
+            const paymentStatus: 'paid' | 'partial' | 'unpaid' = totalPayments >= sale.finalTotal
+                ? 'paid'
+                : totalPayments > 0
+                    ? 'partial'
+                    : 'unpaid';
+
+            const cleanedItems = sale.items.map(item => ({
+                product: {
+                    id: item.product.id,
+                    name: item.product.name,
+                    category: item.product.category,
+                    subcategory: item.product.subcategory || '',
+                    costPrice: item.product.costPrice,
+                },
+                quantity: item.quantity,
+                price: item.price,
+                costPriceAtSale: productsData[item.product.id]?.costPrice ?? item.costPriceAtSale,
+            }));
+
+            const saleDataForFirestore = cleanUndefined({
+                items: cleanedItems,
                 subtotal: sale.subtotal,
                 discount: sale.discount,
                 finalTotal: sale.finalTotal,
-                date: Timestamp.fromDate(sale.date)
-            };
-            transaction.set(saleRef, saleDataForFirestore);
-            createdSales.push({ ...sale, id: saleRef.id });
+                date: sale.date,
+                channel: sale.channel,
+                orderNo: sale.orderNo,
+                customerName: sale.customerName,
+                grossTotal: sale.grossTotal,
+                taxAmount: sale.taxAmount,
+                shippingFee: sale.shippingFee,
+                otherFee: sale.otherFee,
+                payments: sale.payments,
+                paymentStatus,
+                paidStatus: paymentStatus,
+                paymentMethod: sale.paymentMethod,
+                note: sale.note,
+                sourceFileName: sale.sourceFileName,
+            });
+
+            transaction.set(saleRef, convertDatesToTimestamps(saleDataForFirestore));
+            createdSales.push({ ...sale, id: saleRef.id, paymentStatus });
         }
-        
+
         return createdSales;
     });
 
-    await addActivityLog(user, `mencatat ${newSales.length} penjualan baru dari impor file.`);
+    for (const sale of newSales) {
+        await recordSaleJournalEntry(sale, user, sale.sourceFileName ? 'sales-import' : 'pos');
+    }
+
+    await addActivityLog(user, `mencatat ${newSales.length} penjualan baru.`);
     return newSales;
 };
 
@@ -308,7 +746,12 @@ export const updateSale = async (originalSale: Sale, updatedSaleData: Sale, user
             date: Timestamp.fromDate(new Date(updatedSaleData.date)),
         });
     });
-     await addActivityLog(user, `memperbarui penjualan (ID: ...${originalSale.id.slice(-6)})`);
+
+    await reverseSaleCashSnapshot(originalSale);
+    await deleteJournalEntriesByReference(originalSale.orderNo || originalSale.id);
+    const saleForJournal: Sale = { ...updatedSaleData, id: originalSale.id };
+    await recordSaleJournalEntry(saleForJournal, user, saleForJournal.sourceFileName ? 'sales-import' : 'pos');
+    await addActivityLog(user, `memperbarui penjualan (ID: ...${originalSale.id.slice(-6)})`);
 };
 
 export const deleteSale = async (sale: Sale, user: UserRole): Promise<void> => {
@@ -334,6 +777,8 @@ export const deleteSale = async (sale: Sale, user: UserRole): Promise<void> => {
         transaction.delete(saleRef);
     });
 
+    await reverseSaleCashSnapshot(sale);
+    await deleteJournalEntriesByReference(sale.orderNo || sale.id);
     await addActivityLog(user, `menghapus penjualan (ID: ...${sale.id.slice(-6)})`);
 };
 
@@ -373,6 +818,10 @@ export const batchDeleteSales = async (sales: Sale[], user: UserRole): Promise<v
         }
     });
 
+    for (const sale of sales) {
+        await reverseSaleCashSnapshot(sale);
+        await deleteJournalEntriesByReference(sale.orderNo || sale.id);
+    }
     await addActivityLog(user, `menghapus ${sales.length} transaksi penjualan secara massal.`);
 };
 
@@ -389,20 +838,32 @@ export const addExpense = async (expense: Omit<Expense, 'id'>, user: UserRole | 
     if(user !== 'sistem') {
         await addActivityLog(user, `mencatat pengeluaran: "${newExpense.name}" sebesar ${formatCurrency(newExpense.amount)}`);
     }
+    await recordExpenseJournalEntry(newExpense, user);
     return newExpense;
 };
 
 export const updateExpense = async (id: string, expenseData: Partial<Omit<Expense, 'id'>>, user: UserRole) => {
+    const originalExpense = await getDocumentById<Expense>('expenses', id);
     const dataToUpdate: any = { ...expenseData };
     if (expenseData.date) {
         dataToUpdate.date = Timestamp.fromDate(new Date(expenseData.date));
     }
     await updateDocument<Expense>('expenses', id, dataToUpdate);
+    if (originalExpense) {
+        await updateCashflowSnapshot(originalExpense.date, 0, -originalExpense.amount);
+        await deleteJournalEntriesByReference(originalExpense.id);
+    }
+    const updatedExpense = await getDocumentById<Expense>('expenses', id);
+    if (updatedExpense) {
+        await recordExpenseJournalEntry(updatedExpense, user);
+    }
     await addActivityLog(user, `memperbarui pengeluaran: "${expenseData.name}"`);
 };
 
 export const deleteExpense = async (expense: Expense, user: UserRole) => {
     await deleteDocument('expenses', expense.id);
+    await updateCashflowSnapshot(expense.date, 0, -expense.amount);
+    await deleteJournalEntriesByReference(expense.id);
     await addActivityLog(user, `menghapus pengeluaran: "${expense.name}"`);
 };
 
@@ -468,8 +929,9 @@ export const addReturn = async (returnData: Omit<Return, 'id'>, user: UserRole):
                 ...returnData,
             };
         });
-        
+
         await addActivityLog(user, `mencatat retur dari penjualan (ID: ...${newReturn.saleId.slice(-6)})`);
+        await recordReturnJournalEntry(newReturn as Return, user);
         return newReturn as Return;
 
     } catch (e) {
@@ -488,20 +950,32 @@ export async function getOtherIncomes(): Promise<OtherIncome[]> {
 export const addOtherIncome = async (income: Omit<OtherIncome, 'id'>, user: UserRole) => {
     const newIncome = await addDocument<OtherIncome>('otherIncomes', income);
     await addActivityLog(user, `mencatat pemasukan lain: "${newIncome.name}" sebesar ${formatCurrency(newIncome.amount)}`);
+    await recordOtherIncomeJournalEntry(newIncome, user);
     return newIncome;
 };
 
 export const updateOtherIncome = async (id: string, incomeData: Partial<Omit<OtherIncome, 'id'>>, user: UserRole) => {
+    const originalIncome = await getDocumentById<OtherIncome>('otherIncomes', id);
     const dataToUpdate: any = { ...incomeData };
     if (incomeData.date) {
         dataToUpdate.date = Timestamp.fromDate(new Date(incomeData.date));
     }
     await updateDocument<OtherIncome>('otherIncomes', id, dataToUpdate);
+    if (originalIncome) {
+        await updateCashflowSnapshot(originalIncome.date, -originalIncome.amount, 0);
+        await deleteJournalEntriesByReference(originalIncome.id);
+    }
+    const updatedIncome = await getDocumentById<OtherIncome>('otherIncomes', id);
+    if (updatedIncome) {
+        await recordOtherIncomeJournalEntry(updatedIncome, user);
+    }
     await addActivityLog(user, `memperbarui pemasukan lain: "${incomeData.name}"`);
 };
 
 export const deleteOtherIncome = async (income: OtherIncome, user: UserRole) => {
     await deleteDocument('otherIncomes', income.id);
+    await updateCashflowSnapshot(income.date, -income.amount, 0);
+    await deleteJournalEntriesByReference(income.id);
     await addActivityLog(user, `menghapus pemasukan lain: "${income.name}"`);
 };
 
@@ -594,6 +1068,436 @@ export const saveSettings = async (settings: Partial<Settings>, user: UserRole):
     
     await addActivityLog(user, `memperbarui pengaturan umum toko.`);
 };
+
+
+// Warehouse & Stock Transfer functions
+export const getWarehouses = async (): Promise<Warehouse[]> => {
+    return getCollection<Warehouse>('warehouses');
+};
+
+export const saveWarehouse = async (warehouse: Omit<Warehouse, 'id'> & { id?: string }): Promise<Warehouse> => {
+    const id = warehouse.id || warehouse.name.toLowerCase().replace(/\s+/g, '-');
+    const { id: _ignored, ...data } = warehouse;
+    return addDocument<Warehouse>('warehouses', data, id);
+};
+
+export const deleteWarehouse = async (warehouseId: string): Promise<void> => {
+    await deleteDocument('warehouses', warehouseId);
+};
+
+export const getStockTransfers = async (): Promise<StockTransfer[]> => {
+    const transfers = await getCollection<StockTransfer>('stockTransfers');
+    return transfers.map(t => ({ ...t, date: new Date(t.date) }));
+};
+
+export const transferStockBetweenWarehouses = async (
+    transfer: Omit<StockTransfer, 'id'>,
+    user: UserRole,
+): Promise<void> => {
+    const { productId, fromWarehouseId, toWarehouseId, quantity, date, note } = transfer;
+
+    if (quantity <= 0) {
+        throw new Error('Jumlah transfer harus lebih besar dari 0');
+    }
+
+    await runTransaction(db, async (transaction) => {
+        const productRef = doc(db, 'products', productId);
+        const productDoc = await transaction.get(productRef);
+        if (!productDoc.exists()) {
+            throw new Error('Produk tidak ditemukan untuk transfer stok');
+        }
+
+        const productData = { id: productDoc.id, ...productDoc.data() } as Product;
+        const warehouses = [...(productData.warehouses || [])];
+
+        const fromWarehouse = warehouses.find(w => w.warehouseId === fromWarehouseId);
+        if (!fromWarehouse || fromWarehouse.quantity < quantity) {
+            throw new Error('Stok di gudang asal tidak mencukupi');
+        }
+
+        fromWarehouse.quantity -= quantity;
+
+        let toWarehouse = warehouses.find(w => w.warehouseId === toWarehouseId);
+        if (!toWarehouse) {
+            toWarehouse = { warehouseId: toWarehouseId, quantity: 0 };
+            warehouses.push(toWarehouse);
+        }
+        toWarehouse.quantity += quantity;
+
+        transaction.update(productRef, { warehouses });
+
+        const transferData: Omit<StockTransfer, 'id'> = {
+            productId,
+            fromWarehouseId,
+            toWarehouseId,
+            quantity,
+            date,
+            note,
+            user,
+        };
+
+        const transferRef = doc(collection(db, 'stockTransfers'));
+        transaction.set(transferRef, convertDatesToTimestamps(transferData));
+    });
+
+    await addActivityLog(user, `memindahkan ${quantity} unit stok produk (${productId}) dari gudang ${fromWarehouseId} ke ${toWarehouseId}.`);
+};
+
+// Accounting exports
+export const getAccounts = async (): Promise<Account[]> => {
+    await ensureDefaultChartOfAccounts();
+    return getCollection<Account>('accounts');
+};
+
+export const upsertAccount = async (account: Account) => {
+    await ensureAccountReference(account);
+};
+
+export const getJournalEntries = async (): Promise<JournalEntry[]> => {
+    const entries = await getCollection<JournalEntry>('journalEntries');
+    return entries.map(entry => ({
+        ...entry,
+        date: entry.date instanceof Date ? entry.date : new Date(entry.date),
+    }));
+};
+
+export const getCashflowSnapshots = async (): Promise<CashflowSnapshot[]> => {
+    const snapshots = await getCollection<CashflowSnapshot>('cashflowSnapshots');
+    return snapshots.map(snapshot => ({
+        ...snapshot,
+        generatedAt: snapshot.generatedAt instanceof Date ? snapshot.generatedAt : new Date(snapshot.generatedAt),
+    }));
+};
+
+interface AccountSummary {
+    account: Account;
+    normalBalance: NormalBalance;
+    opening: number;
+    debit: number;
+    credit: number;
+}
+
+const normalizePeriod = (period?: Partial<FinancialPeriod>): FinancialPeriod => {
+    const startDate = period?.startDate ? new Date(period.startDate) : new Date(0);
+    const endDate = period?.endDate ? new Date(period.endDate) : new Date('9999-12-31T23:59:59.999Z');
+    return { startDate, endDate };
+};
+
+const createStatementRow = (row: TrialBalanceRow): FinancialStatementRow => ({
+    accountId: row.accountId,
+    accountCode: row.accountCode,
+    accountName: row.accountName,
+    amount: row.closingBalance,
+});
+
+export const generateTrialBalance = async (period?: Partial<FinancialPeriod>): Promise<TrialBalanceRow[]> => {
+    await ensureDefaultChartOfAccounts();
+    const [accounts, entries] = await Promise.all([getAccounts(), getJournalEntries()]);
+    const periodRange = normalizePeriod(period);
+    const accountMap = new Map<string, Account>(accounts.map((account) => [account.id, account]));
+    const summaries = new Map<string, AccountSummary>();
+
+    const getAccountForLine = (line: JournalLine): Account => {
+        if (accountMap.has(line.accountId)) {
+            return accountMap.get(line.accountId)!;
+        }
+        const fallback: Account = {
+            id: line.accountId,
+            code: line.accountId,
+            name: line.accountName,
+            type: 'other',
+        };
+        accountMap.set(line.accountId, fallback);
+        return fallback;
+    };
+
+    const sortedEntries = entries
+        .map((entry) => ({ ...entry, date: entry.date instanceof Date ? entry.date : new Date(entry.date) }))
+        .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    for (const entry of sortedEntries) {
+        for (const line of entry.lines) {
+            const account = getAccountForLine(line);
+            const normalBalance = NORMAL_BALANCE_BY_TYPE[account.type] ?? 'debit';
+            const summary = summaries.get(account.id) || {
+                account,
+                normalBalance,
+                opening: 0,
+                debit: 0,
+                credit: 0,
+            };
+
+            if (entry.date < periodRange.startDate) {
+                summary.opening += normalBalance === 'debit' ? line.debit - line.credit : line.credit - line.debit;
+            } else if (entry.date <= periodRange.endDate) {
+                summary.debit += line.debit;
+                summary.credit += line.credit;
+            }
+
+            summaries.set(account.id, summary);
+        }
+    }
+
+    const rows: TrialBalanceRow[] = [];
+
+    const addRowForAccount = (account: Account, summary?: AccountSummary) => {
+        const normalBalance = summary?.normalBalance ?? (NORMAL_BALANCE_BY_TYPE[account.type] ?? 'debit');
+        const opening = summary?.opening ?? 0;
+        const debit = summary?.debit ?? 0;
+        const credit = summary?.credit ?? 0;
+        const closing = opening + (normalBalance === 'debit' ? debit - credit : credit - debit);
+
+        if (opening === 0 && debit === 0 && credit === 0 && closing === 0) {
+            return;
+        }
+
+        rows.push({
+            accountId: account.id,
+            accountCode: account.code,
+            accountName: account.name,
+            accountType: account.type,
+            normalBalance,
+            openingBalance: opening,
+            debit,
+            credit,
+            closingBalance: closing,
+        });
+    };
+
+    for (const account of accounts) {
+        addRowForAccount(account, summaries.get(account.id));
+    }
+
+    for (const [accountId, summary] of summaries.entries()) {
+        if (!rows.some((row) => row.accountId === accountId)) {
+            addRowForAccount(summary.account, summary);
+        }
+    }
+
+    rows.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+    return rows;
+};
+
+export const generateGeneralLedger = async (period?: Partial<FinancialPeriod>): Promise<GeneralLedgerAccountLedger[]> => {
+    await ensureDefaultChartOfAccounts();
+    const [accounts, entries] = await Promise.all([getAccounts(), getJournalEntries()]);
+    const periodRange = normalizePeriod(period);
+    const accountMap = new Map<string, Account>(accounts.map((account) => [account.id, account]));
+    const openingBalances = new Map<string, number>();
+    const ledgerMap = new Map<string, GeneralLedgerAccountLedger>();
+
+    const sortedEntries = entries
+        .map((entry) => ({ ...entry, date: entry.date instanceof Date ? entry.date : new Date(entry.date) }))
+        .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    for (const entry of sortedEntries) {
+        for (const line of entry.lines) {
+            const account = accountMap.get(line.accountId) || {
+                id: line.accountId,
+                code: line.accountId,
+                name: line.accountName,
+                type: 'other' as Account['type'],
+            };
+
+            if (!accountMap.has(account.id)) {
+                accountMap.set(account.id, account);
+            }
+
+            const normalBalance = NORMAL_BALANCE_BY_TYPE[account.type] ?? 'debit';
+            const delta = normalBalance === 'debit' ? line.debit - line.credit : line.credit - line.debit;
+
+            if (entry.date < periodRange.startDate) {
+                openingBalances.set(account.id, (openingBalances.get(account.id) || 0) + delta);
+                continue;
+            }
+
+            if (entry.date > periodRange.endDate) {
+                continue;
+            }
+
+            let ledger = ledgerMap.get(account.id);
+            if (!ledger) {
+                const openingBalance = openingBalances.get(account.id) || 0;
+                ledger = {
+                    accountId: account.id,
+                    accountCode: account.code,
+                    accountName: account.name,
+                    accountType: account.type,
+                    normalBalance,
+                    openingBalance,
+                    closingBalance: openingBalance,
+                    lines: [],
+                };
+                ledgerMap.set(account.id, ledger);
+            }
+
+            const previousBalance = ledger.lines.length > 0
+                ? ledger.lines[ledger.lines.length - 1].balance
+                : ledger.openingBalance;
+            const newBalance = previousBalance + delta;
+
+            const ledgerLine: GeneralLedgerLine = {
+                date: entry.date,
+                reference: entry.reference,
+                description: entry.description,
+                debit: line.debit,
+                credit: line.credit,
+                balance: newBalance,
+            };
+
+            ledger.lines.push(ledgerLine);
+            ledger.closingBalance = newBalance;
+        }
+    }
+
+    const ledgers = Array.from(ledgerMap.values()).filter(
+        (ledger) => ledger.lines.length > 0 || ledger.openingBalance !== 0,
+    );
+
+    ledgers.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+    return ledgers;
+};
+
+export const generateIncomeStatement = async (period?: Partial<FinancialPeriod>): Promise<IncomeStatement> => {
+    const periodRange = normalizePeriod(period);
+    const trialBalance = await generateTrialBalance(periodRange);
+
+    const revenueRows = trialBalance.filter((row) => row.accountType === 'revenue');
+    const hppRows = trialBalance.filter((row) => row.accountCode.startsWith('51') || row.accountCode === '5200');
+    const expenseRows = trialBalance.filter(
+        (row) => row.accountType === 'expense' && !row.accountCode.startsWith('51') && row.accountCode !== '5200',
+    );
+
+    const toPositiveRow = (row: TrialBalanceRow): FinancialStatementRow => ({
+        accountId: row.accountId,
+        accountCode: row.accountCode,
+        accountName: row.accountName,
+        amount: Math.abs(row.closingBalance),
+    });
+
+    const pendapatanSection: FinancialStatementSection = {
+        title: 'Pendapatan',
+        rows: revenueRows.map(toPositiveRow),
+        total: revenueRows.reduce((sum, row) => sum + Math.abs(row.closingBalance), 0),
+    };
+
+    const hppSection: FinancialStatementSection = {
+        title: 'Harga Pokok Penjualan & Retur',
+        rows: hppRows.map(toPositiveRow),
+        total: hppRows.reduce((sum, row) => sum + Math.abs(row.closingBalance), 0),
+    };
+
+    const expenseSection: FinancialStatementSection = {
+        title: 'Beban Operasional',
+        rows: expenseRows.map(toPositiveRow),
+        total: expenseRows.reduce((sum, row) => sum + Math.abs(row.closingBalance), 0),
+    };
+
+    const labaKotor = pendapatanSection.total - hppSection.total;
+    const labaBersih = labaKotor - expenseSection.total;
+
+    return {
+        period: periodRange,
+        pendapatan: pendapatanSection,
+        hpp: hppSection,
+        beban: expenseSection,
+        labaKotor,
+        labaBersih,
+    };
+};
+
+export const generateBalanceSheet = async (period?: Partial<FinancialPeriod>): Promise<BalanceSheet> => {
+    const periodRange = normalizePeriod(period);
+    const trialBalance = await generateTrialBalance(periodRange);
+    const incomeStatement = await generateIncomeStatement(periodRange);
+
+    const toStatement = (rows: TrialBalanceRow[]) => rows.map(createStatementRow);
+
+    const asetRows = trialBalance.filter((row) => row.accountType === 'asset');
+    const kewajibanRows = trialBalance.filter((row) => row.accountType === 'liability');
+    const ekuitasRows = trialBalance.filter((row) => row.accountType === 'equity');
+
+    const assetsTotal = asetRows.reduce((sum, row) => sum + row.closingBalance, 0);
+    const liabilitiesTotal = kewajibanRows.reduce((sum, row) => sum + row.closingBalance, 0);
+
+    let equityRows = toStatement(ekuitasRows);
+    const currentEarningsIndex = equityRows.findIndex((row) => row.accountId === '3300');
+
+    if (currentEarningsIndex >= 0) {
+        equityRows[currentEarningsIndex] = {
+            ...equityRows[currentEarningsIndex],
+            amount: equityRows[currentEarningsIndex].amount + incomeStatement.labaBersih,
+        };
+    } else {
+        equityRows = [
+            ...equityRows,
+            {
+                accountId: 'current-period-profit',
+                accountCode: '33XX',
+                accountName: 'Laba/Rugi Berjalan',
+                amount: incomeStatement.labaBersih,
+            },
+        ];
+    }
+
+    const equityTotal = equityRows.reduce((sum, row) => sum + row.amount, 0);
+    const totalLiabilitiesEquity = liabilitiesTotal + equityTotal;
+
+    return {
+        period: periodRange,
+        aset: { title: 'Aset', rows: toStatement(asetRows), total: assetsTotal },
+        kewajiban: { title: 'Kewajiban', rows: toStatement(kewajibanRows), total: liabilitiesTotal },
+        ekuitas: { title: 'Ekuitas', rows: equityRows, total: equityTotal },
+        totalAset: assetsTotal,
+        totalKewajibanDanEkuitas: totalLiabilitiesEquity,
+    };
+};
+
+export const generateCashflowStatement = async (period?: Partial<FinancialPeriod>): Promise<CashflowStatement> => {
+    const periodRange = normalizePeriod(period);
+    const entries = await getJournalEntries();
+
+    let openingBalance = 0;
+    let cashIn = 0;
+    let cashOut = 0;
+
+    const sortedEntries = entries
+        .map((entry) => ({ ...entry, date: entry.date instanceof Date ? entry.date : new Date(entry.date) }))
+        .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    for (const entry of sortedEntries) {
+        for (const line of entry.lines) {
+            if (!CASH_ACCOUNT_IDS.has(line.accountId)) {
+                continue;
+            }
+
+            const delta = line.debit - line.credit;
+            if (entry.date < periodRange.startDate) {
+                openingBalance += delta;
+            } else if (entry.date <= periodRange.endDate) {
+                if (delta >= 0) {
+                    cashIn += delta;
+                } else {
+                    cashOut += Math.abs(delta);
+                }
+            }
+        }
+    }
+
+    const netCashFlow = cashIn - cashOut;
+    const closingBalance = openingBalance + netCashFlow;
+
+    return {
+        period: periodRange,
+        cashIn,
+        cashOut,
+        netCashFlow,
+        openingBalance,
+        closingBalance,
+    };
+};
+
+export const initializeDefaultChartOfAccounts = ensureDefaultChartOfAccounts;
 
 
 // Stock Opname specific functions
