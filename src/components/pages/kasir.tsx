@@ -5,12 +5,12 @@
 import type { FC } from 'react';
 import React, { useState, useEffect, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
-import type { SaleItem, Product, Settings, FlashSale, Sale, Expense, Return, UserRole } from '@/lib/types';
-import { PlusCircle, MinusCircle, Search, Calendar as CalendarIcon, ArrowLeft, ShoppingCart, Zap, Undo2, Wallet, Trash2, FileUp } from 'lucide-react';
+import type { SaleItem, Product, Settings, FlashSale, Sale, Expense, Return, UserRole, PaymentSplit, PaymentMethod } from '@/lib/types';
+import { PlusCircle, MinusCircle, Search, Calendar as CalendarIcon, ArrowLeft, ShoppingCart, Zap, Undo2, Wallet, Trash2, FileUp, PauseCircle, Printer, Plus, Clock3 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
@@ -37,6 +37,10 @@ import { addSale, addReturn, addExpense, getProducts } from '@/lib/data-service'
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { cn } from '@/lib/utils';
 import { Skeleton } from '../ui/skeleton';
 import { ReturnForm } from './retur';
 import { ExpenseForm } from './pengeluaran';
@@ -44,6 +48,53 @@ import { ExpenseForm } from './pengeluaran';
 
 const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.round(amount));
+};
+
+type PaymentRow = PaymentSplit & { id: string };
+
+type ParkedTransaction = {
+    id: string;
+    label: string;
+    cart: SaleItem[];
+    discount: number;
+    transactionDate: Date;
+    payments: PaymentSplit[];
+    note?: string;
+    createdAt: Date;
+};
+
+const PARKED_STORAGE_KEY = 'tokocepat:parked-transactions';
+
+const paymentMethodLabels: Record<PaymentMethod, string> = {
+    cash: 'Tunai',
+    transfer: 'Transfer Bank',
+    ewallet: 'E-Wallet',
+    credit: 'Kredit',
+};
+
+const loadParkedTransactions = (): ParkedTransaction[] => {
+    if (typeof window === 'undefined') return [];
+    try {
+        const raw = window.localStorage.getItem(PARKED_STORAGE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw) as any[];
+        return parsed.map(item => ({
+            ...item,
+            transactionDate: item.transactionDate ? new Date(item.transactionDate) : new Date(),
+            createdAt: item.createdAt ? new Date(item.createdAt) : new Date(),
+            payments: Array.isArray(item.payments)
+                ? item.payments.map((payment: any) => ({
+                    method: payment.method as PaymentMethod,
+                    amount: Number(payment.amount) || 0,
+                    reference: payment.reference,
+                    dueDate: payment.dueDate ? new Date(payment.dueDate) : undefined,
+                }))
+                : [],
+        }));
+    } catch (error) {
+        console.warn('Gagal memuat transaksi parkir', error);
+        return [];
+    }
 };
 
 interface KasirPageProps {
@@ -84,8 +135,30 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
   const [sortOrder, setSortOrder] = useState('terlaris');
   const [isReturnFormOpen, setReturnFormOpen] = useState(false);
   const [isExpenseFormOpen, setExpenseFormOpen] = useState(false);
+  const [paymentRows, setPaymentRows] = useState<PaymentRow[]>([{ id: 'payment-row-1', method: 'cash', amount: 0 }]);
+  const [isPaymentDialogOpen, setPaymentDialogOpen] = useState(false);
+  const [saleNote, setSaleNote] = useState('');
+  const [parkLabel, setParkLabel] = useState('');
+  const [isParkDialogOpen, setParkDialogOpen] = useState(false);
+  const [parkedTransactions, setParkedTransactions] = useState<ParkedTransaction[]>(() => loadParkedTransactions());
+  const [isParkedSheetOpen, setParkedSheetOpen] = useState(false);
+  const [lastCompletedSale, setLastCompletedSale] = useState<Sale | null>(null);
 
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serializable = parkedTransactions.map(transaction => ({
+        ...transaction,
+        transactionDate: transaction.transactionDate.toISOString(),
+        createdAt: transaction.createdAt.toISOString(),
+        payments: transaction.payments.map(payment => ({
+            ...payment,
+            dueDate: payment.dueDate ? payment.dueDate.toISOString() : undefined,
+        })),
+    }));
+    window.localStorage.setItem(PARKED_STORAGE_KEY, JSON.stringify(serializable));
+  }, [parkedTransactions]);
 
   React.useEffect(() => {
     if (!carouselApi) {
@@ -175,6 +248,8 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
 
   const clearCart = () => {
     setCart([]);
+    setPaymentRows([{ id: `payment-row-${Date.now()}`, method: 'cash', amount: 0 }]);
+    setSaleNote('');
   };
 
   const { subtotal, discountAmount, total } = useMemo(() => {
@@ -183,53 +258,191 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
     const total = subtotal - discountAmount;
     return { subtotal, discountAmount, total };
   }, [cart, discount]);
-  
-  const handlePayment = async () => {
+
+  const paymentTotal = useMemo(() => paymentRows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0), [paymentRows]);
+  const paymentDifference = useMemo(() => paymentTotal - total, [paymentTotal, total]);
+
+  const addPaymentRow = () => {
+    const newRow: PaymentRow = { id: `payment-row-${Date.now()}`, method: 'cash', amount: Math.max(total - paymentTotal, 0) };
+    setPaymentRows(prev => [...prev, newRow]);
+  };
+
+  const removePaymentRow = (id: string) => {
+    setPaymentRows(prev => (prev.length === 1 ? prev : prev.filter(row => row.id !== id)));
+  };
+
+  const updatePaymentRow = (id: string, changes: Partial<PaymentRow>) => {
+    setPaymentRows(prev => prev.map(row => (row.id === id ? { ...row, ...changes } : row)));
+  };
+
+  const handlePaymentClick = () => {
     if (cart.length === 0) {
       toast({
-        variant: "destructive",
-        title: "Keranjang Kosong",
-        description: "Silakan tambahkan produk ke keranjang terlebih dahulu.",
+        variant: 'destructive',
+        title: 'Keranjang Kosong',
+        description: 'Silakan tambahkan produk ke keranjang terlebih dahulu.',
       });
       return;
     }
-    
+
     const itemsInCart = cart.filter(item => item.quantity > 0);
-
     if (itemsInCart.length === 0) {
-       toast({
-        variant: "destructive",
-        title: "Keranjang Kosong",
-        description: "Tidak ada item dengan jumlah lebih dari 0 untuk dibayar.",
+      toast({
+        variant: 'destructive',
+        title: 'Keranjang Kosong',
+        description: 'Tidak ada item dengan jumlah lebih dari 0 untuk dibayar.',
       });
       return;
     }
 
-    const subtotal = itemsInCart.reduce((acc, item) => acc + item.price * item.quantity, 0);
-    const finalTotal = subtotal * (1 - discount / 100);
+    if (paymentRows.length === 0) {
+        setPaymentRows([{ id: `payment-row-${Date.now()}`, method: 'cash', amount: total }]);
+    } else {
+        setPaymentRows(prev => prev.map((row, index) => ({ ...row, amount: index === 0 ? total : 0 })));
+    }
+    setPaymentDialogOpen(true);
+  };
 
-    const newSale = {
+  const submitPayment = async () => {
+    const itemsInCart = cart.filter(item => item.quantity > 0);
+    if (itemsInCart.length === 0) {
+      toast({ variant: 'destructive', title: 'Keranjang Kosong', description: 'Tidak ada item untuk diproses.' });
+      return;
+    }
+
+    const roundedTotal = Math.round(total);
+    const preparedPayments = paymentRows
+      .map(row => ({ ...row, amount: Math.round(Number(row.amount) || 0) }))
+      .filter(row => row.amount > 0);
+
+    if (preparedPayments.length === 0) {
+      toast({ variant: 'destructive', title: 'Pembayaran Tidak Valid', description: 'Masukkan minimal satu metode pembayaran.' });
+      return;
+    }
+
+    const paymentsSum = preparedPayments.reduce((sum, row) => sum + row.amount, 0);
+    const difference = roundedTotal - paymentsSum;
+
+    if (Math.abs(difference) > 1 && roundedTotal !== 0) {
+      toast({ variant: 'destructive', title: 'Jumlah Pembayaran Tidak Sesuai', description: 'Total pembayaran harus sama dengan total belanja.' });
+      return;
+    }
+
+    if (difference !== 0 && preparedPayments.length > 0) {
+      preparedPayments[0].amount += difference;
+    }
+
+    if (preparedPayments[0].amount < 0) {
+      toast({ variant: 'destructive', title: 'Jumlah Pembayaran Tidak Valid', description: 'Pembayaran tidak boleh bernilai negatif.' });
+      return;
+    }
+
+    const paymentsToSave: PaymentSplit[] = preparedPayments.map(({ id, ...rest }) => rest);
+    const subtotalValue = itemsInCart.reduce((acc, item) => acc + item.price * item.quantity, 0);
+    const finalTotalValue = Math.round(subtotalValue * (1 - discount / 100));
+
+    const salePayload: Omit<Sale, 'id'> = {
         items: itemsInCart,
-        subtotal,
+        subtotal: subtotalValue,
         discount,
-        finalTotal: finalTotal,
+        finalTotal: finalTotalValue,
         date: transactionDate,
+        payments: paymentsToSave,
+        paymentMethod: paymentsToSave.length === 1 ? paymentsToSave[0].method : undefined,
+        channel: 'Offline',
+        orderNo: `POS-${Date.now()}`,
+        customerName: 'Walk-in',
+        grossTotal: subtotalValue,
+        note: saleNote ? saleNote.trim() : undefined,
     };
 
     try {
-        await addSale(newSale, userRole);
-        toast({
-          title: "Pembayaran Berhasil",
-          description: `Total pembayaran ${formatCurrency(total)} telah berhasil diproses.`,
-        });
+        const savedSale = await addSale(salePayload, userRole);
+        setLastCompletedSale({ ...savedSale, payments: paymentsToSave });
+        toast({ title: 'Pembayaran Berhasil', description: `Total pembayaran ${formatCurrency(finalTotalValue)} telah diproses.` });
         clearCart();
         setDiscount(settings.defaultDiscount || 0);
         onDataNeedsRefresh();
+        setPaymentDialogOpen(false);
     } catch (error) {
-        toast({ title: "Error", description: "Gagal menyimpan transaksi.", variant: "destructive" });
         console.error(error);
+        toast({ title: 'Error', description: 'Gagal menyimpan transaksi.', variant: 'destructive' });
     }
-  }
+  };
+
+  const printReceipt = (sale: Sale) => {
+    if (typeof window === 'undefined') return;
+    const receiptWindow = window.open('', 'printWindow');
+    if (!receiptWindow) {
+      toast({ title: 'Gagal Membuka Cetak', description: 'Izinkan popup untuk mencetak struk.', variant: 'destructive' });
+      return;
+    }
+
+    const saleDate = format(new Date(sale.date), 'dd MMM yyyy HH:mm', { locale: id });
+    const itemsHtml = sale.items.map(item => {
+        const lineTotal = item.price * item.quantity;
+        return `<tr><td>${item.product.name}</td><td class="qty">${item.quantity}</td><td class="amount">${formatCurrency(item.price)}</td><td class="amount">${formatCurrency(lineTotal)}</td></tr>`;
+    }).join('');
+
+    const paymentsHtml = (sale.payments || []).map(payment => {
+        const methodLabel = paymentMethodLabels[payment.method] || payment.method;
+        return `<li>${methodLabel}: <strong>${formatCurrency(payment.amount)}</strong>${payment.reference ? ` (Ref: ${payment.reference})` : ''}</li>`;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+    <html>
+      <head>
+        <meta charSet="utf-8" />
+        <title>Struk Pembayaran</title>
+        <style>
+          body { font-family: 'PT Sans', Arial, sans-serif; margin: 0; padding: 16px; color: #1f2937; }
+          h1 { font-size: 1.25rem; margin-bottom: 4px; }
+          .meta { font-size: 0.85rem; color: #6b7280; margin-bottom: 12px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+          th, td { text-align: left; padding: 4px 0; font-size: 0.85rem; }
+          th { border-bottom: 1px solid #e5e7eb; }
+          .qty { text-align: center; width: 48px; }
+          .amount { text-align: right; width: 96px; }
+          .totals { margin-top: 8px; font-size: 0.9rem; }
+          .totals div { display: flex; justify-content: space-between; margin-bottom: 4px; }
+          ul { padding-left: 16px; margin: 0; }
+        </style>
+      </head>
+      <body>
+        <h1>${settings.storeName}</h1>
+        <div class="meta">
+          <div>Tanggal: ${saleDate}</div>
+          <div>Invoice: ${sale.orderNo || sale.id}</div>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Produk</th><th class="qty">Qty</th><th class="amount">Harga</th><th class="amount">Total</th></tr>
+          </thead>
+          <tbody>${itemsHtml}</tbody>
+        </table>
+        <div class="totals">
+          <div><span>Subtotal</span><span>${formatCurrency(sale.subtotal)}</span></div>
+          <div><span>Diskon (${sale.discount}% )</span><span>- ${formatCurrency((sale.subtotal * sale.discount) / 100)}</span></div>
+          <div style="font-weight:600;"><span>Total</span><span>${formatCurrency(sale.finalTotal)}</span></div>
+        </div>
+        ${paymentsHtml ? `<div style="margin-top:12px"><strong>Metode Pembayaran</strong><ul>${paymentsHtml}</ul></div>` : ''}
+        ${sale.note ? `<p style="margin-top:12px">Catatan: ${sale.note}</p>` : ''}
+        <p style="margin-top:16px; font-size:0.8rem;">Terima kasih telah berbelanja!</p>
+      </body>
+    </html>`;
+
+    receiptWindow.document.open();
+    receiptWindow.document.write(html);
+    receiptWindow.document.close();
+    receiptWindow.focus();
+    receiptWindow.print();
+  };
+
+  useEffect(() => {
+    if (!lastCompletedSale) return;
+    printReceipt(lastCompletedSale);
+    setLastCompletedSale(null);
+  }, [lastCompletedSale]);
 
   const handleSaveReturn = async (itemData: Omit<Return, 'id'>) => {
     try {
@@ -253,6 +466,61 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
         console.error(error);
     }
   }
+
+  const parkCurrentTransaction = () => {
+    if (cart.length === 0) {
+        toast({ variant: 'destructive', title: 'Tidak Ada Item', description: 'Keranjang masih kosong sehingga tidak dapat diparkir.' });
+        return;
+    }
+
+    const itemsInCart = cart.filter(item => item.quantity > 0);
+    if (itemsInCart.length === 0) {
+        toast({ variant: 'destructive', title: 'Jumlah Tidak Valid', description: 'Pastikan ada item dengan kuantitas lebih dari 0 sebelum parkir.' });
+        return;
+    }
+
+    const label = parkLabel.trim() || `Transaksi ${format(transactionDate, 'dd MMM HH:mm', { locale: id })}`;
+    const snapshot: ParkedTransaction = {
+        id: `park-${Date.now()}`,
+        label,
+        cart: itemsInCart.map(item => ({
+            ...item,
+            product: { ...item.product },
+        })),
+        discount,
+        transactionDate,
+        payments: paymentRows.map(({ id, ...rest }) => rest),
+        note: saleNote ? saleNote.trim() : undefined,
+        createdAt: new Date(),
+    };
+
+    setParkedTransactions(prev => [...prev, snapshot]);
+    setParkLabel('');
+    setParkDialogOpen(false);
+    clearCart();
+    toast({ title: 'Transaksi Disimpan', description: 'Transaksi berhasil diparkir. Anda dapat melanjutkannya kapan saja.' });
+  };
+
+  const resumeParkedTransaction = (transaction: ParkedTransaction) => {
+    setCart(transaction.cart.map(item => ({ ...item, product: { ...item.product } })));
+    setDiscount(transaction.discount);
+    setTransactionDate(new Date(transaction.transactionDate));
+    if (transaction.payments.length > 0) {
+        setPaymentRows(transaction.payments.map((payment, index) => ({ ...payment, id: `payment-row-${Date.now()}-${index}` })));
+    } else {
+        const fallbackSubtotal = transaction.cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
+        const fallbackTotal = Math.round(fallbackSubtotal * (1 - transaction.discount / 100));
+        setPaymentRows([{ id: `payment-row-${Date.now()}`, method: 'cash', amount: fallbackTotal }]);
+    }
+    setSaleNote(transaction.note || '');
+    setParkedTransactions(prev => prev.filter(item => item.id !== transaction.id));
+    setParkedSheetOpen(false);
+    toast({ title: 'Transaksi Dipulihkan', description: `${transaction.label} siap diproses.` });
+  };
+
+  const removeParkedTransaction = (id: string) => {
+    setParkedTransactions(prev => prev.filter(item => item.id !== id));
+  };
 
   const renderProductGrid = (isMobile = false) => (
     <Card className={`h-full flex flex-col shadow-none border-0 ${isMobile ? '' : 'lg:col-span-2'}`}>
@@ -330,6 +598,7 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
   );
 
   const renderCartView = (isMobile = false) => (
+    <>
      <Card className={`h-full flex flex-col shadow-none border-0 ${isMobile ? '' : 'lg:col-span-1'}`}>
         <CardHeader>
             <div className="flex justify-between items-center mb-2">
@@ -362,6 +631,62 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
                             </AlertDialogContent>
                         </AlertDialog>
                     )}
+                    <Sheet open={isParkedSheetOpen} onOpenChange={setParkedSheetOpen}>
+                        <SheetTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-7 w-7 relative" title="Transaksi Tertahan">
+                                <PauseCircle className="h-4 w-4" />
+                                {parkedTransactions.length > 0 && (
+                                    <Badge
+                                        variant="destructive"
+                                        className="absolute -top-1 -right-1 h-4 min-w-[1.25rem] px-1 text-[10px] font-medium"
+                                    >
+                                        {parkedTransactions.length}
+                                    </Badge>
+                                )}
+                            </Button>
+                        </SheetTrigger>
+                        <SheetContent side="right" className="w-[320px] sm:w-[420px] overflow-y-auto">
+                            <SheetHeader>
+                                <SheetTitle>Transaksi Tertahan</SheetTitle>
+                            </SheetHeader>
+                            <div className="mt-4 space-y-4">
+                                {parkedTransactions.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">Belum ada transaksi yang diparkir.</p>
+                                ) : (
+                                    parkedTransactions.map((transaction) => {
+                                        const itemCount = transaction.cart.reduce((sum, item) => sum + item.quantity, 0);
+                                        const subtotalParked = transaction.cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+                                        const discountValue = (subtotalParked * transaction.discount) / 100;
+                                        const finalValue = subtotalParked - discountValue;
+                                        return (
+                                            <Card key={transaction.id}>
+                                                <CardHeader className="pb-2">
+                                                    <CardTitle className="text-base">{transaction.label}</CardTitle>
+                                                    <CardDescription>
+                                                        {format(transaction.createdAt, 'dd MMM yyyy HH:mm', { locale: id })}
+                                                    </CardDescription>
+                                                </CardHeader>
+                                                <CardContent className="space-y-2 text-sm">
+                                                    <div className="flex justify-between"><span>Item</span><span>{itemCount}</span></div>
+                                                    <div className="flex justify-between"><span>Diskon</span><span>{transaction.discount}%</span></div>
+                                                    <div className="flex justify-between"><span>Total</span><span>{formatCurrency(finalValue)}</span></div>
+                                                    {transaction.note && <p className="text-xs text-muted-foreground">Catatan: {transaction.note}</p>}
+                                                </CardContent>
+                                                <CardFooter className="flex gap-2">
+                                                    <Button size="sm" className="flex-1" onClick={() => resumeParkedTransaction(transaction)}>
+                                                        Gunakan
+                                                    </Button>
+                                                    <Button size="sm" variant="outline" onClick={() => removeParkedTransaction(transaction.id)}>
+                                                        Hapus
+                                                    </Button>
+                                                </CardFooter>
+                                            </Card>
+                                        );
+                                    })
+                                )}
+                            </div>
+                        </SheetContent>
+                    </Sheet>
                     <Badge variant="outline">{cartItemCount} Item</Badge>
                 </div>
             </div>
@@ -493,11 +818,165 @@ const KasirPage: FC<KasirPageProps> = React.memo(({
                     <span>{formatCurrency(total)}</span>
                 </div>
             </div>
-            <Button className="w-full mt-4 bg-accent text-accent-foreground hover:bg-accent/90" onClick={handlePayment}>
-                Bayar
-            </Button>
+            <div className="flex w-full gap-2 mt-4">
+                <Button variant="outline" className="flex-1" onClick={() => setParkDialogOpen(true)}>
+                    <PauseCircle className="mr-2 h-4 w-4" /> Parkir
+                </Button>
+                <Button className="flex-1 bg-accent text-accent-foreground hover:bg-accent/90" onClick={handlePaymentClick}>
+                    <Printer className="mr-2 h-4 w-4" /> Bayar & Cetak
+                </Button>
+            </div>
         </CardFooter>
         </Card>
+
+        <Dialog open={isPaymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
+          <DialogContent className="sm:max-w-[560px]">
+            <DialogHeader>
+              <DialogTitle>Proses Pembayaran</DialogTitle>
+              <DialogDescription>Pilih metode pembayaran dan pastikan jumlahnya sesuai dengan total belanja.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              {paymentRows.map((row, index) => (
+                <div key={row.id} className="grid gap-3 sm:grid-cols-12 items-end">
+                  <div className="sm:col-span-3">
+                    <Label>Metode</Label>
+                    <Select
+                      value={row.method}
+                      onValueChange={(value) =>
+                        updatePaymentRow(row.id, {
+                          method: value as PaymentMethod,
+                          dueDate: value === 'credit' ? row.dueDate : undefined,
+                        })
+                      }
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Pilih metode" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="cash">Tunai</SelectItem>
+                        <SelectItem value="transfer">Transfer Bank</SelectItem>
+                        <SelectItem value="ewallet">E-Wallet</SelectItem>
+                        <SelectItem value="credit">Kredit</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="sm:col-span-3">
+                    <Label>Jumlah</Label>
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      value={row.amount}
+                      onChange={(event) => {
+                        const parsed = Number(event.target.value);
+                        updatePaymentRow(row.id, { amount: Number.isNaN(parsed) ? 0 : parsed });
+                      }}
+                    />
+                  </div>
+                  <div className="sm:col-span-3">
+                    <Label>Referensi</Label>
+                    <Input
+                      value={row.reference ?? ''}
+                      placeholder="Opsional"
+                      onChange={(event) => updatePaymentRow(row.id, { reference: event.target.value })}
+                    />
+                  </div>
+                  {row.method === 'credit' && (
+                    <div className="sm:col-span-3">
+                      <Label>Jatuh Tempo</Label>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-full justify-start text-left font-normal">
+                            <Clock3 className="mr-2 h-4 w-4" />
+                            {row.dueDate ? format(row.dueDate, 'dd MMM yyyy', { locale: id }) : 'Pilih tanggal'}
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={row.dueDate}
+                            onSelect={(date) => updatePaymentRow(row.id, { dueDate: date ?? undefined })}
+                            initialFocus
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
+                  <div className="sm:col-span-12 flex justify-end">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => removePaymentRow(row.id)}
+                      disabled={paymentRows.length === 1}
+                      aria-label={`Hapus metode pembayaran ${index + 1}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+
+              <Button type="button" variant="ghost" className="flex items-center gap-2" onClick={addPaymentRow}>
+                <Plus className="h-4 w-4" /> Tambah Metode Pembayaran
+              </Button>
+
+              <div className="rounded-md border p-3 text-sm space-y-2">
+                <div className="flex justify-between"><span>Total Belanja</span><span>{formatCurrency(total)}</span></div>
+                <div className={cn('flex justify-between', Math.abs(paymentDifference) > 1 ? 'text-destructive font-medium' : '')}>
+                  <span>Selisih</span>
+                  <span>{formatCurrency(paymentDifference)}</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Catatan Struk</Label>
+                <Textarea
+                  value={saleNote}
+                  onChange={(event) => setSaleNote(event.target.value)}
+                  placeholder="Catatan opsional untuk struk"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button" variant="secondary">
+                  Batal
+                </Button>
+              </DialogClose>
+              <Button type="button" onClick={submitPayment}>
+                Selesaikan Pembayaran
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={isParkDialogOpen} onOpenChange={setParkDialogOpen}>
+          <DialogContent className="sm:max-w-[420px]">
+            <DialogHeader>
+              <DialogTitle>Parkir Transaksi</DialogTitle>
+              <DialogDescription>Simpan transaksi saat ini untuk dilanjutkan di lain waktu.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Nama / Catatan</Label>
+                <Input
+                  value={parkLabel}
+                  onChange={(event) => setParkLabel(event.target.value)}
+                  placeholder="Contoh: Pesanan Pak Budi"
+                />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Item, diskon, dan metode pembayaran akan disimpan sebagaimana kondisi saat ini.
+              </p>
+            </div>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button" variant="secondary">Batal</Button>
+              </DialogClose>
+              <Button type="button" onClick={parkCurrentTransaction}>Simpan ke Parkir</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+    </>
   );
 
   if (loading) {

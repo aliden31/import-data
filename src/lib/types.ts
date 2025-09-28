@@ -17,6 +17,20 @@ export interface ExpenseCategory {
   subcategories: SubCategory[];
 }
 
+export type PaymentMethod = 'cash' | 'transfer' | 'ewallet' | 'credit';
+
+export interface PaymentSplit {
+  method: PaymentMethod;
+  amount: number;
+  reference?: string;
+  dueDate?: Date;
+}
+
+export interface WarehouseStock {
+  warehouseId: string;
+  quantity: number;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -26,6 +40,10 @@ export interface Product {
   category: string;
   subcategory?: string;
   salesCount?: number;
+  sku?: string;
+  barcode?: string;
+  reorderPoint?: number;
+  warehouses?: WarehouseStock[];
 }
 
 export interface SaleItem {
@@ -49,6 +67,19 @@ export interface Sale {
   discount: number; // percentage
   finalTotal: number;
   date: Date;
+  channel?: string;
+  orderNo?: string;
+  customerName?: string;
+  grossTotal?: number;
+  taxAmount?: number;
+  shippingFee?: number;
+  otherFee?: number;
+  paymentMethod?: PaymentMethod;
+  payments?: PaymentSplit[];
+  paymentStatus?: 'paid' | 'partial' | 'unpaid';
+  paidStatus?: 'paid' | 'partial' | 'unpaid';
+  note?: string;
+  sourceFileName?: string;
 }
 
 export interface ReturnItem {
@@ -99,6 +130,24 @@ export interface FlashSale {
     products: FlashSaleProduct[];
 }
 
+export interface Warehouse {
+  id: string;
+  name: string;
+  address?: string;
+  contactPerson?: string;
+}
+
+export interface StockTransfer {
+  id: string;
+  productId: string;
+  fromWarehouseId: string;
+  toWarehouseId: string;
+  quantity: number;
+  date: Date;
+  note?: string;
+  user: UserRole;
+}
+
 export interface PublicSettings {
     defaultDiscount: number;
 }
@@ -111,6 +160,8 @@ export interface Settings {
   theme: 'default' | 'colorful' | 'dark';
   categories?: Category[];
   expenseCategories?: ExpenseCategory[];
+  lowStockThreshold?: number;
+  primaryWarehouseId?: string;
 }
 
 export interface StockOpnameLog {
@@ -133,6 +184,45 @@ export interface ActivityLog {
 
 export type UserRole = 'admin' | 'kasir';
 
+export interface Account {
+    id: string;
+    code: string;
+    name: string;
+    type:
+      | 'asset'
+      | 'liability'
+      | 'equity'
+      | 'revenue'
+      | 'expense'
+      | 'other';
+    parentCode?: string;
+}
+
+export interface JournalLine {
+    accountId: string;
+    accountName: string;
+    debit: number;
+    credit: number;
+}
+
+export interface JournalEntry {
+    id: string;
+    date: Date;
+    reference: string;
+    description: string;
+    lines: JournalLine[];
+    sourceModule: 'pos' | 'purchase' | 'sales-import' | 'inventory' | 'expense' | 'return' | 'other';
+}
+
+export interface CashflowSnapshot {
+    id: string;
+    period: string; // YYYY-MM
+    cashIn: number;
+    cashOut: number;
+    method: 'direct' | 'indirect';
+    generatedAt: Date;
+}
+
 export interface ImportedFile {
     id: string; // Firestore document ID
     name: string;
@@ -144,4 +234,30 @@ export interface SkuMapping {
     importSku: string;
     mappedProductId: string;
     mappedProductName: string;
+}
+
+export interface PreparedImportedSaleItem {
+    sku: string;
+    name: string;
+    quantity: number;
+    price: number;
+    costPrice?: number;
+}
+
+export interface PreparedImportedSale {
+    orderNo: string;
+    transactionDate: string;
+    channel: string;
+    customerName: string;
+    paymentMethod: PaymentMethod | undefined;
+    paidStatus: 'paid' | 'partial' | 'unpaid';
+    grossTotal: number;
+    netTotal: number;
+    discountAmount: number;
+    taxAmount: number;
+    shippingFee: number;
+    otherFee: number;
+    note?: string;
+    items: PreparedImportedSaleItem[];
+    payments: PaymentSplit[];
 }
