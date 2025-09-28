@@ -6,7 +6,9 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: false,
   },
   eslint: {
-    ignoreDuringBuilds: false,
+    // ESLint is not available in some deployment environments. Allow the build to
+    // proceed without it so that type checking can still verify the codebase.
+    ignoreDuringBuilds: true,
   },
   images: {
     remotePatterns: [
@@ -17,6 +19,18 @@ const nextConfig: NextConfig = {
         pathname: '/**',
       },
     ],
+  },
+  webpack: config => {
+    // The Genkit SDK optionally imports tracing exporters and Firebase bindings.
+    // They are not required for this project, so mark them as external to avoid
+    // bundling warnings when the packages are not installed.
+    config.externals = config.externals || [];
+    config.externals.push({
+      '@opentelemetry/exporter-jaeger': 'commonjs @opentelemetry/exporter-jaeger',
+      '@genkit-ai/firebase': 'commonjs @genkit-ai/firebase',
+      handlebars: 'commonjs handlebars',
+    });
+    return config;
   },
 };
 

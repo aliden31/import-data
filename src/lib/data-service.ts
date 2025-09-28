@@ -20,43 +20,358 @@ import {
   onSnapshot,
   where,
 } from 'firebase/firestore';
-import type { Product, Sale, Return, Expense, FlashSale, Settings, SaleItem, ReturnItem, Category, SubCategory, StockOpnameLog, UserRole, ActivityLog, PublicSettings, OtherIncome, ImportedFile, SkuMapping } from './types';
+import type {
+  Product,
+  Sale,
+  Return,
+  Expense,
+  FlashSale,
+  Settings,
+  SaleItem,
+  ReturnItem,
+  Category,
+  SubCategory,
+  StockOpnameLog,
+  UserRole,
+  ActivityLog,
+  PublicSettings,
+  OtherIncome,
+  ImportedFile,
+  SkuMapping,
+  Warehouse,
+  StockTransfer,
+  PaymentSplit,
+  JournalEntry,
+  JournalLine,
+  Account,
+  CashflowSnapshot,
+  PaymentMethod,
+} from './types';
 import { placeholderProducts } from './placeholder-data';
 
 // Generic Firestore interaction functions
 const PAGE_SIZE = 200; // Define the number of transactions per page
 
+function cleanUndefined<T extends Record<string, unknown>>(value: T): T {
+  const result: Record<string, unknown> = {};
+  Object.entries(value).forEach(([key, val]) => {
+    if (val !== undefined) {
+      result[key] = val;
+    }
+  });
+  return result as T;
+}
+
+function convertTimestampsToDates<T>(value: T): T {
+  if (value instanceof Timestamp) {
+    return value.toDate() as unknown as T;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => convertTimestampsToDates(item)) as unknown as T;
+  }
+
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    Object.entries(value as Record<string, unknown>).forEach(([key, val]) => {
+      result[key] = convertTimestampsToDates(val);
+    });
+    return result as T;
+  }
+
+  return value;
+}
+
+const ACCOUNT_REFERENCES: Record<string, Account> = {
+  cash: { id: '1101', code: '1101', name: 'Kas', type: 'asset' },
+  bank: { id: '1102', code: '1102', name: 'Bank', type: 'asset' },
+  ewallet: { id: '1103', code: '1103', name: 'Kas E-Wallet', type: 'asset' },
+  ar: { id: '1130', code: '1130', name: 'Piutang Usaha', type: 'asset' },
+  inventory: { id: '1400', code: '1400', name: 'Persediaan Barang Dagang', type: 'asset' },
+  cogs: { id: '5100', code: '5100', name: 'Harga Pokok Penjualan', type: 'expense' },
+  salesRevenue: { id: '4100', code: '4100', name: 'Pendapatan Penjualan', type: 'revenue' },
+  salesReturn: { id: '5200', code: '5200', name: 'Retur Penjualan', type: 'expense' },
+  expense: { id: '6100', code: '6100', name: 'Beban Operasional', type: 'expense' },
+  otherIncome: { id: '4200', code: '4200', name: 'Pendapatan Lain-Lain', type: 'revenue' },
+};
+
+const ACCOUNT_METADATA: Record<string, Account> = Object.values(ACCOUNT_REFERENCES).reduce((acc, account) => {
+  acc[account.id] = account;
+  return acc;
+}, {} as Record<string, Account>);
+
+const PAYMENT_ACCOUNT_MAP: Record<PaymentMethod, Account> = {
+  cash: ACCOUNT_REFERENCES.cash,
+  transfer: ACCOUNT_REFERENCES.bank,
+  ewallet: ACCOUNT_REFERENCES.ewallet,
+  credit: ACCOUNT_REFERENCES.ar,
+};
+
+const accountCache = new Map<string, Account>();
+
+async function ensureAccountReference(account: Account) {
+  if (accountCache.has(account.id)) {
+    return accountCache.get(account.id)!;
+  }
+  try {
+    const accountRef = doc(db, 'accounts', account.id);
+    const snapshot = await getDoc(accountRef);
+    if (!snapshot.exists()) {
+      await setDoc(accountRef, account);
+    }
+    accountCache.set(account.id, account);
+  } catch (error) {
+    console.warn('Failed to ensure account reference', error);
+  }
+  return account;
+}
+
+const getPeriodKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+};
+
+async function updateCashflowSnapshot(date: Date, cashInDelta: number, cashOutDelta: number) {
+  const period = getPeriodKey(date);
+  const snapshotRef = doc(db, 'cashflowSnapshots', `direct-${period}`);
+  await runTransaction(db, async (transaction) => {
+    const snapshotDoc = await transaction.get(snapshotRef);
+    const existing = snapshotDoc.exists()
+      ? convertTimestampsToDates(snapshotDoc.data() as CashflowSnapshot)
+      : { cashIn: 0, cashOut: 0, method: 'direct', generatedAt: date, period };
+
+    const method: CashflowSnapshot['method'] = existing.method === 'indirect' ? 'indirect' : 'direct';
+
+    const updated = {
+      cashIn: (existing.cashIn || 0) + cashInDelta,
+      cashOut: (existing.cashOut || 0) + cashOutDelta,
+      method,
+      generatedAt: date,
+      period,
+    } satisfies Omit<CashflowSnapshot, 'id'>;
+
+    transaction.set(snapshotRef, convertDatesToTimestamps(updated));
+  });
+}
+
+async function addJournalEntryInternal(entry: Omit<JournalEntry, 'id'>): Promise<JournalEntry> {
+  const preparedLines = entry.lines.filter((line) => line.debit !== 0 || line.credit !== 0);
+  for (const line of preparedLines) {
+    const metadata = ACCOUNT_METADATA[line.accountId];
+    await ensureAccountReference({
+      id: line.accountId,
+      code: line.accountId,
+      name: line.accountName,
+      type: metadata?.type || 'other',
+    });
+  }
+  return addDocument<JournalEntry>('journalEntries', { ...entry, lines: preparedLines });
+}
+
+async function recordSaleJournalEntry(sale: Sale, user: UserRole | 'sistem', source: JournalEntry['sourceModule']) {
+  const payments = (sale.payments && sale.payments.length > 0)
+    ? sale.payments
+    : sale.paymentMethod
+      ? [{ method: sale.paymentMethod, amount: sale.finalTotal }]
+      : [{ method: 'cash', amount: sale.finalTotal }];
+
+  const journalLines: JournalLine[] = [];
+  let totalPaymentAmount = 0;
+
+  for (const payment of payments) {
+    if (payment.amount <= 0) continue;
+    const method = (payment.method in PAYMENT_ACCOUNT_MAP
+      ? payment.method
+      : 'cash') as PaymentMethod;
+    const account = PAYMENT_ACCOUNT_MAP[method];
+    journalLines.push({
+      accountId: account.id,
+      accountName: account.name,
+      debit: payment.amount,
+      credit: 0,
+    });
+    if (method !== 'credit') {
+      totalPaymentAmount += payment.amount;
+    }
+  }
+
+  const paidTotal = payments.reduce((sum, split) => sum + split.amount, 0);
+  if (paidTotal < sale.finalTotal) {
+    const outstanding = sale.finalTotal - paidTotal;
+    if (outstanding > 0) {
+      const account = ACCOUNT_REFERENCES.ar;
+      journalLines.push({ accountId: account.id, accountName: account.name, debit: outstanding, credit: 0 });
+    }
+  }
+
+  const revenueAccount = ACCOUNT_REFERENCES.salesRevenue;
+  journalLines.push({
+    accountId: revenueAccount.id,
+    accountName: revenueAccount.name,
+    debit: 0,
+    credit: sale.finalTotal,
+  });
+
+  const costOfGoods = sale.items.reduce((sum, item) => {
+    const cost = item.costPriceAtSale ?? item.product.costPrice ?? 0;
+    return sum + cost * item.quantity;
+  }, 0);
+
+  if (costOfGoods > 0) {
+    const cogsAccount = ACCOUNT_REFERENCES.cogs;
+    const inventoryAccount = ACCOUNT_REFERENCES.inventory;
+    journalLines.push({ accountId: cogsAccount.id, accountName: cogsAccount.name, debit: costOfGoods, credit: 0 });
+    journalLines.push({ accountId: inventoryAccount.id, accountName: inventoryAccount.name, debit: 0, credit: costOfGoods });
+  }
+
+  await addJournalEntryInternal({
+    date: sale.date,
+    reference: sale.orderNo || sale.id,
+    description: `Penjualan otomatis (${source === 'pos' ? 'POS' : 'Impor'}) oleh ${user}`,
+    lines: journalLines,
+    sourceModule: source,
+  });
+
+  await updateCashflowSnapshot(sale.date, totalPaymentAmount, 0);
+}
+
+async function recordReturnJournalEntry(returnData: Return, user: UserRole | 'sistem') {
+  const journalLines: JournalLine[] = [];
+  const refundAmount = returnData.totalRefund || 0;
+  if (refundAmount > 0) {
+    journalLines.push({
+      accountId: ACCOUNT_REFERENCES.salesReturn.id,
+      accountName: ACCOUNT_REFERENCES.salesReturn.name,
+      debit: refundAmount,
+      credit: 0,
+    });
+    journalLines.push({
+      accountId: ACCOUNT_REFERENCES.cash.id,
+      accountName: ACCOUNT_REFERENCES.cash.name,
+      debit: 0,
+      credit: refundAmount,
+    });
+  }
+
+  const costReturned = returnData.items.reduce((sum, item) => sum + (item.costPriceAtSale || 0) * item.quantity, 0);
+  if (costReturned > 0) {
+    journalLines.push({
+      accountId: ACCOUNT_REFERENCES.inventory.id,
+      accountName: ACCOUNT_REFERENCES.inventory.name,
+      debit: costReturned,
+      credit: 0,
+    });
+    journalLines.push({
+      accountId: ACCOUNT_REFERENCES.cogs.id,
+      accountName: ACCOUNT_REFERENCES.cogs.name,
+      debit: 0,
+      credit: costReturned,
+    });
+  }
+
+  await addJournalEntryInternal({
+    date: returnData.date,
+    reference: returnData.saleId,
+    description: `Retur penjualan oleh ${user}`,
+    lines: journalLines,
+    sourceModule: 'return',
+  });
+
+  if (refundAmount > 0) {
+    await updateCashflowSnapshot(returnData.date, 0, refundAmount);
+  }
+}
+
+async function recordExpenseJournalEntry(expense: Expense, user: UserRole | 'sistem') {
+  const journalLines: JournalLine[] = [
+    {
+      accountId: ACCOUNT_REFERENCES.expense.id,
+      accountName: ACCOUNT_REFERENCES.expense.name,
+      debit: expense.amount,
+      credit: 0,
+    },
+    {
+      accountId: ACCOUNT_REFERENCES.cash.id,
+      accountName: ACCOUNT_REFERENCES.cash.name,
+      debit: 0,
+      credit: expense.amount,
+    },
+  ];
+
+  await addJournalEntryInternal({
+    date: expense.date,
+    reference: expense.id || expense.name,
+    description: `Pengeluaran kas (${expense.category}) oleh ${user}`,
+    lines: journalLines,
+    sourceModule: 'expense',
+  });
+
+  await updateCashflowSnapshot(expense.date, 0, expense.amount);
+}
+
+async function recordOtherIncomeJournalEntry(income: OtherIncome, user: UserRole | 'sistem') {
+  const journalLines: JournalLine[] = [
+    {
+      accountId: ACCOUNT_REFERENCES.cash.id,
+      accountName: ACCOUNT_REFERENCES.cash.name,
+      debit: income.amount,
+      credit: 0,
+    },
+    {
+      accountId: ACCOUNT_REFERENCES.otherIncome.id,
+      accountName: ACCOUNT_REFERENCES.otherIncome.name,
+      debit: 0,
+      credit: income.amount,
+    },
+  ];
+
+  await addJournalEntryInternal({
+    date: income.date,
+    reference: income.id || income.name,
+    description: `Pemasukan lain oleh ${user}`,
+    lines: journalLines,
+    sourceModule: 'other',
+  });
+
+  await updateCashflowSnapshot(income.date, income.amount, 0);
+}
+
+function convertDatesToTimestamps<T>(value: T): T {
+  if (value instanceof Date) {
+    return Timestamp.fromDate(value) as unknown as T;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => convertDatesToTimestamps(item)) as unknown as T;
+  }
+
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    Object.entries(value as Record<string, unknown>).forEach(([key, val]) => {
+      result[key] = convertDatesToTimestamps(val);
+    });
+    return result as T;
+  }
+
+  return value;
+}
+
 async function getCollection<T>(collectionName: string): Promise<T[]> {
   const q = query(collection(db, collectionName));
   const querySnapshot = await getDocs(q);
-  const results: T[] = [];
-    querySnapshot.docs.forEach(doc => {
-        const data = doc.data();
-        // Convert Firestore Timestamps to JS Dates
-        for (const key in data) {
-          if (Object.prototype.hasOwnProperty.call(data, key)) {
-            const value = data[key];
-            if (value instanceof Timestamp) {
-              data[key] = value.toDate();
-            }
-          }
-        }
-        results.push({ id: doc.id, ...data } as T);
-    });
-    return results;
+  const results: T[] = querySnapshot.docs.map((docSnap) => {
+    const data = convertTimestampsToDates(docSnap.data());
+    return { id: docSnap.id, ...data } as T;
+  });
+  return results;
 }
 
 async function getDocumentById<T>(collectionName: string, id: string): Promise<T | undefined> {
     const docRef = doc(db, collectionName, id);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-        const data = docSnap.data();
-        // Convert Firestore Timestamps to JS Dates
-        Object.keys(data).forEach(key => {
-            if (data[key] instanceof Timestamp) {
-                data[key] = data[key].toDate();
-            }
-        });
+        const data = convertTimestampsToDates(docSnap.data());
         return { id: docSnap.id, ...data } as T;
     }
     return undefined;
@@ -64,12 +379,7 @@ async function getDocumentById<T>(collectionName: string, id: string): Promise<T
 
 
 async function addDocument<T>(collectionName: string, data: Omit<T, 'id'>, id?: string): Promise<T> {
-    const dataWithTimestamp: { [key: string]: any } = { ...data };
-    Object.keys(dataWithTimestamp).forEach(key => {
-        if (dataWithTimestamp[key] instanceof Date) {
-            dataWithTimestamp[key] = Timestamp.fromDate(dataWithTimestamp[key]);
-        }
-    });
+    const dataWithTimestamp = convertDatesToTimestamps(data);
 
   let docRef;
   if (id) {
@@ -167,19 +477,28 @@ export const deleteProduct = async (id: string, user: UserRole) => {
 export const getSales = async (): Promise<Sale[]> => {
     const salesData = await getCollection<any>('sales');
 
-    // Sort by date descending
-    salesData.sort((a, b) => b.date.toDate().getTime() - a.date.toDate().getTime());
+    const normalized = salesData.map((rawSale) => {
+        const saleDate = rawSale.date instanceof Date ? rawSale.date : new Date(rawSale.date);
+        const payments: PaymentSplit[] | undefined = rawSale.payments?.map((payment: PaymentSplit) => ({
+            ...payment,
+            dueDate: payment.dueDate ? new Date(payment.dueDate) : undefined,
+        }));
 
-    // Limit to the first PAGE_SIZE results for initial load
-    // Full pagination logic might require more complex queries using startAfter/startAt
-    return salesData.slice(0, PAGE_SIZE).map(sale => ({
-        ...sale,
-        date: sale.date,
-        items: sale.items.map((item: any) => ({
-             ...item,
-             product: item.product || { id: 'unknown', name: 'Produk Dihapus', costPrice: 0, sellingPrice: 0, stock: 0, category: 'Lainnya' }
-        }))
-    }));
+        return {
+            ...rawSale,
+            date: saleDate,
+            payments,
+            paymentStatus: rawSale.paymentStatus || rawSale.paidStatus,
+            items: rawSale.items.map((item: any) => ({
+                ...item,
+                product: item.product || { id: 'unknown', name: 'Produk Dihapus', costPrice: 0, sellingPrice: 0, stock: 0, category: 'Lainnya' }
+            })),
+        } as Sale;
+    });
+
+    normalized.sort((a, b) => b.date.getTime() - a.date.getTime());
+
+    return normalized.slice(0, PAGE_SIZE);
 }
 
 export const getSaleById = (id: string) => getDocumentById<Sale>('sales', id);
@@ -191,15 +510,13 @@ export const addSale = async (sale: Omit<Sale, 'id'>, user: UserRole): Promise<S
 
 export const batchAddSales = async (sales: Omit<Sale, 'id'>[], user: UserRole): Promise<Sale[]> => {
     const stockChanges: Record<string, number> = {};
-    
-    // Aggregate all stock changes from all sales
+
     for (const sale of sales) {
         for (const item of sale.items) {
             stockChanges[item.product.id] = (stockChanges[item.product.id] || 0) + item.quantity;
         }
     }
 
-    // Run a single transaction for all operations
     const newSales = await runTransaction(db, async (transaction) => {
         const productRefs = Object.keys(stockChanges).map(productId => doc(db, 'products', productId));
         const productDocs = await Promise.all(productRefs.map(ref => transaction.get(ref)));
@@ -207,14 +524,13 @@ export const batchAddSales = async (sales: Omit<Sale, 'id'>[], user: UserRole): 
 
         for (const docSnap of productDocs) {
             if (docSnap.exists()) {
-                productsData[docSnap.id] = { id: docSnap.id, ...docSnap.data() } as Product;
+                productsData[docSnap.id] = { id: docSnap.id, ...convertTimestampsToDates(docSnap.data()) } as Product;
             }
         }
 
-        // Update stock for all affected products
         for (const productId in stockChanges) {
             if (productsData[productId]) {
-                const productRef = doc(db, "products", productId);
+                const productRef = doc(db, 'products', productId);
                 const productData = productsData[productId];
                 const newStock = productData.stock - stockChanges[productId];
                 transaction.update(productRef, { stock: newStock });
@@ -224,35 +540,62 @@ export const batchAddSales = async (sales: Omit<Sale, 'id'>[], user: UserRole): 
         }
 
         const createdSales: Sale[] = [];
-        // Create new sale documents
+
         for (const sale of sales) {
-            const saleRef = doc(collection(db, "sales"));
-            const saleDataForFirestore = {
-                items: sale.items.map(item => ({
-                    product: {
-                        id: item.product.id,
-                        name: item.product.name,
-                        category: item.product.category,
-                        subcategory: item.product.subcategory || '',
-                        costPrice: item.product.costPrice,
-                    },
-                    quantity: item.quantity,
-                    price: item.price,
-                    costPriceAtSale: productsData[item.product.id]?.costPrice ?? item.costPriceAtSale,
-                })),
+            const saleRef = doc(collection(db, 'sales'));
+            const totalPayments = sale.payments?.reduce((sum, payment) => sum + payment.amount, 0) ?? 0;
+            const paymentStatus: 'paid' | 'partial' | 'unpaid' = totalPayments >= sale.finalTotal
+                ? 'paid'
+                : totalPayments > 0
+                    ? 'partial'
+                    : 'unpaid';
+
+            const cleanedItems = sale.items.map(item => ({
+                product: {
+                    id: item.product.id,
+                    name: item.product.name,
+                    category: item.product.category,
+                    subcategory: item.product.subcategory || '',
+                    costPrice: item.product.costPrice,
+                },
+                quantity: item.quantity,
+                price: item.price,
+                costPriceAtSale: productsData[item.product.id]?.costPrice ?? item.costPriceAtSale,
+            }));
+
+            const saleDataForFirestore = cleanUndefined({
+                items: cleanedItems,
                 subtotal: sale.subtotal,
                 discount: sale.discount,
                 finalTotal: sale.finalTotal,
-                date: Timestamp.fromDate(sale.date)
-            };
-            transaction.set(saleRef, saleDataForFirestore);
-            createdSales.push({ ...sale, id: saleRef.id });
+                date: sale.date,
+                channel: sale.channel,
+                orderNo: sale.orderNo,
+                customerName: sale.customerName,
+                grossTotal: sale.grossTotal,
+                taxAmount: sale.taxAmount,
+                shippingFee: sale.shippingFee,
+                otherFee: sale.otherFee,
+                payments: sale.payments,
+                paymentStatus,
+                paidStatus: paymentStatus,
+                paymentMethod: sale.paymentMethod,
+                note: sale.note,
+                sourceFileName: sale.sourceFileName,
+            });
+
+            transaction.set(saleRef, convertDatesToTimestamps(saleDataForFirestore));
+            createdSales.push({ ...sale, id: saleRef.id, paymentStatus });
         }
-        
+
         return createdSales;
     });
 
-    await addActivityLog(user, `mencatat ${newSales.length} penjualan baru dari impor file.`);
+    for (const sale of newSales) {
+        await recordSaleJournalEntry(sale, user, sale.sourceFileName ? 'sales-import' : 'pos');
+    }
+
+    await addActivityLog(user, `mencatat ${newSales.length} penjualan baru.`);
     return newSales;
 };
 
@@ -389,6 +732,7 @@ export const addExpense = async (expense: Omit<Expense, 'id'>, user: UserRole | 
     if(user !== 'sistem') {
         await addActivityLog(user, `mencatat pengeluaran: "${newExpense.name}" sebesar ${formatCurrency(newExpense.amount)}`);
     }
+    await recordExpenseJournalEntry(newExpense, user);
     return newExpense;
 };
 
@@ -468,8 +812,9 @@ export const addReturn = async (returnData: Omit<Return, 'id'>, user: UserRole):
                 ...returnData,
             };
         });
-        
+
         await addActivityLog(user, `mencatat retur dari penjualan (ID: ...${newReturn.saleId.slice(-6)})`);
+        await recordReturnJournalEntry(newReturn as Return, user);
         return newReturn as Return;
 
     } catch (e) {
@@ -488,6 +833,7 @@ export async function getOtherIncomes(): Promise<OtherIncome[]> {
 export const addOtherIncome = async (income: Omit<OtherIncome, 'id'>, user: UserRole) => {
     const newIncome = await addDocument<OtherIncome>('otherIncomes', income);
     await addActivityLog(user, `mencatat pemasukan lain: "${newIncome.name}" sebesar ${formatCurrency(newIncome.amount)}`);
+    await recordOtherIncomeJournalEntry(newIncome, user);
     return newIncome;
 };
 
@@ -593,6 +939,103 @@ export const saveSettings = async (settings: Partial<Settings>, user: UserRole):
     }
     
     await addActivityLog(user, `memperbarui pengaturan umum toko.`);
+};
+
+
+// Warehouse & Stock Transfer functions
+export const getWarehouses = async (): Promise<Warehouse[]> => {
+    return getCollection<Warehouse>('warehouses');
+};
+
+export const saveWarehouse = async (warehouse: Omit<Warehouse, 'id'> & { id?: string }): Promise<Warehouse> => {
+    const id = warehouse.id || warehouse.name.toLowerCase().replace(/\s+/g, '-');
+    const { id: _ignored, ...data } = warehouse;
+    return addDocument<Warehouse>('warehouses', data, id);
+};
+
+export const deleteWarehouse = async (warehouseId: string): Promise<void> => {
+    await deleteDocument('warehouses', warehouseId);
+};
+
+export const getStockTransfers = async (): Promise<StockTransfer[]> => {
+    const transfers = await getCollection<StockTransfer>('stockTransfers');
+    return transfers.map(t => ({ ...t, date: new Date(t.date) }));
+};
+
+export const transferStockBetweenWarehouses = async (
+    transfer: Omit<StockTransfer, 'id'>,
+    user: UserRole,
+): Promise<void> => {
+    const { productId, fromWarehouseId, toWarehouseId, quantity, date, note } = transfer;
+
+    if (quantity <= 0) {
+        throw new Error('Jumlah transfer harus lebih besar dari 0');
+    }
+
+    await runTransaction(db, async (transaction) => {
+        const productRef = doc(db, 'products', productId);
+        const productDoc = await transaction.get(productRef);
+        if (!productDoc.exists()) {
+            throw new Error('Produk tidak ditemukan untuk transfer stok');
+        }
+
+        const productData = { id: productDoc.id, ...productDoc.data() } as Product;
+        const warehouses = [...(productData.warehouses || [])];
+
+        const fromWarehouse = warehouses.find(w => w.warehouseId === fromWarehouseId);
+        if (!fromWarehouse || fromWarehouse.quantity < quantity) {
+            throw new Error('Stok di gudang asal tidak mencukupi');
+        }
+
+        fromWarehouse.quantity -= quantity;
+
+        let toWarehouse = warehouses.find(w => w.warehouseId === toWarehouseId);
+        if (!toWarehouse) {
+            toWarehouse = { warehouseId: toWarehouseId, quantity: 0 };
+            warehouses.push(toWarehouse);
+        }
+        toWarehouse.quantity += quantity;
+
+        transaction.update(productRef, { warehouses });
+
+        const transferData: Omit<StockTransfer, 'id'> = {
+            productId,
+            fromWarehouseId,
+            toWarehouseId,
+            quantity,
+            date,
+            note,
+            user,
+        };
+
+        const transferRef = doc(collection(db, 'stockTransfers'));
+        transaction.set(transferRef, convertDatesToTimestamps(transferData));
+    });
+
+    await addActivityLog(user, `memindahkan ${quantity} unit stok produk (${productId}) dari gudang ${fromWarehouseId} ke ${toWarehouseId}.`);
+};
+
+// Accounting exports
+export const getAccounts = async (): Promise<Account[]> => getCollection<Account>('accounts');
+
+export const upsertAccount = async (account: Account) => {
+    await ensureAccountReference(account);
+};
+
+export const getJournalEntries = async (): Promise<JournalEntry[]> => {
+    const entries = await getCollection<JournalEntry>('journalEntries');
+    return entries.map(entry => ({
+        ...entry,
+        date: entry.date instanceof Date ? entry.date : new Date(entry.date),
+    }));
+};
+
+export const getCashflowSnapshots = async (): Promise<CashflowSnapshot[]> => {
+    const snapshots = await getCollection<CashflowSnapshot>('cashflowSnapshots');
+    return snapshots.map(snapshot => ({
+        ...snapshot,
+        generatedAt: snapshot.generatedAt instanceof Date ? snapshot.generatedAt : new Date(snapshot.generatedAt),
+    }));
 };
 
 

@@ -144,11 +144,12 @@ const SalesImporterReviewPage: React.FC<SalesImporterReviewPageProps> = ({ onImp
                 }
             }
 
-            const finalSales: Omit<Sale, 'id'>[] = salesToCreate.map((sale: ExtractedSale) => {
-                const saleItems: SaleItem[] = sale.items.reduce((acc: SaleItem[], item) => {
-                    let validItem: SaleItem | null = null;
+            const aggregatedMap = new Map<string, { product: Product; quantity: number; totalPrice: number }>();
+
+            for (const sale of salesToCreate) {
+                for (const item of sale.items) {
                     let finalProductId: string | undefined;
-                    let importSku = item.sku;
+                    const importSku = item.sku;
 
                     const existingProduct = updatedDbProducts.find(p => p.id.toLowerCase() === importSku.toLowerCase());
 
@@ -163,36 +164,68 @@ const SalesImporterReviewPage: React.FC<SalesImporterReviewPageProps> = ({ onImp
                         }
                     }
 
-                    if (finalProductId) {
-                        const productInfo = updatedDbProducts.find(p => p.id === finalProductId);
-                        if (productInfo) {
-                            validItem = {
-                                product: { id: productInfo.id, name: productInfo.name, category: productInfo.category, subcategory: productInfo.subcategory, costPrice: productInfo.costPrice },
-                                quantity: item.quantity, price: item.price, costPriceAtSale: productInfo.costPrice,
-                            };
-                        }
+                    if (!finalProductId) continue;
+
+                    const productInfo = updatedDbProducts.find(p => p.id === finalProductId);
+                    if (!productInfo) continue;
+
+                    const existingLine = aggregatedMap.get(finalProductId);
+                    const lineQuantity = item.quantity;
+                    const lineTotalPrice = item.price * item.quantity;
+
+                    if (existingLine) {
+                        existingLine.quantity += lineQuantity;
+                        existingLine.totalPrice += lineTotalPrice;
+                    } else {
+                        aggregatedMap.set(finalProductId, {
+                            product: productInfo,
+                            quantity: lineQuantity,
+                            totalPrice: lineTotalPrice,
+                        });
                     }
+                }
+            }
 
-                    if (validItem) acc.push(validItem);
-                    return acc;
-                }, []);
+            const aggregatedItemsForSale: SaleItem[] = Array.from(aggregatedMap.values()).map((entry) => {
+                const unitPrice = entry.quantity > 0 ? entry.totalPrice / entry.quantity : 0;
+                return {
+                    product: {
+                        id: entry.product.id,
+                        name: entry.product.name,
+                        category: entry.product.category,
+                        subcategory: entry.product.subcategory,
+                        costPrice: entry.product.costPrice,
+                    },
+                    quantity: entry.quantity,
+                    price: unitPrice,
+                    costPriceAtSale: entry.product.costPrice,
+                };
+            });
 
-                const subtotal = saleItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
+            if (aggregatedItemsForSale.length > 0) {
+                const subtotal = Array.from(aggregatedMap.values()).reduce((acc, entry) => acc + entry.totalPrice, 0);
                 const discount = publicSettings.defaultDiscount || 0;
                 const finalTotal = subtotal * (1 - discount / 100);
 
-                return { items: saleItems, subtotal, discount, finalTotal, date: new Date() };
-            }).filter(sale => sale.items.length > 0);
+                const aggregatedSale: Omit<Sale, 'id'> = {
+                    items: aggregatedItemsForSale,
+                    subtotal,
+                    discount,
+                    finalTotal,
+                    date: new Date(),
+                    sourceFileName: fileName,
+                    channel: 'Import Excel',
+                    note: `Ringkasan ${salesToCreate.length} pesanan dari ${fileName}`,
+                };
 
-            if (finalSales.length > 0) {
-                await batchAddSales(finalSales, userRole);
+                await batchAddSales([aggregatedSale], userRole);
             }
 
             sessionStorage.removeItem('salesImportAnalysis');
             onImportComplete();
             toast({
                 title: "Impor Berhasil",
-                description: `${finalSales.length} transaksi baru dari file impor telah berhasil dicatat.`,
+                description: `Seluruh ${salesToCreate.length} pesanan diringkas ke dalam 1 transaksi penjualan.`,
             });
         } catch (error) {
             console.error('Import failed:', error);
@@ -223,6 +256,7 @@ const SalesImporterReviewPage: React.FC<SalesImporterReviewPageProps> = ({ onImp
                 <AlertTitle>Hasil Analisis</AlertTitle>
                 <AlertDescription>
                     Sistem berhasil mengekstrak <span className="font-bold">{salesToCreate.length} transaksi</span> dengan total <span className="font-bold">{totalQuantity} item</span>.
+                    Seluruh pesanan tersebut akan diringkas menjadi <span className="font-bold">1 transaksi penjualan</span> saat Anda mengkonfirmasi impor.
                     Harap tinjau dan petakan produk yang tidak dikenali di bawah ini sebelum melanjutkan.
                 </AlertDescription>
             </Alert>
